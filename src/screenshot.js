@@ -95,9 +95,12 @@ function getRecentScreenshots(limit = 5) {
   }
 }
 
-// Captures a full-screen screenshot and saves it to the app's data directory
+// Captures a full-screen screenshot of the display where the mouse cursor is
 async function captureFullScreen(desktopCapturer, screen) {
-  const { width, height } = screen.getPrimaryDisplay().size;
+  // Get the display where the mouse cursor currently is
+  const cursorPoint = screen.getCursorScreenPoint();
+  const currentDisplay = screen.getDisplayNearestPoint(cursorPoint);
+  const { width, height } = currentDisplay.size;
 
   const sources = await desktopCapturer.getSources({
     types: ["screen"],
@@ -109,7 +112,17 @@ async function captureFullScreen(desktopCapturer, screen) {
     return;
   }
 
-  const image = sources[0].thumbnail;
+  // Try to find the source matching the current display
+  // desktopCapturer source display_id matches Electron display id
+  let source = sources.find(
+    (s) => s.display_id === String(currentDisplay.id)
+  );
+  // Fallback to first source if no match found
+  if (!source) {
+    source = sources[0];
+  }
+
+  const image = source.thumbnail;
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 
   // Save to app's user data directory instead of pictures folder

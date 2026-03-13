@@ -5,7 +5,7 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --debug",
+    "dev": "ELECTRON_RUN_AS_NODE= electron . --inspect",
     "build": "electron-builder",
     "build:mac": "electron-builder --mac",
     "build:win": "electron-builder --win",
@@ -15,7 +15,8 @@
     "axios": "^0.27.2",
     "dotenv": "^16.4.5",
     "electron-store": "^8.2.0",
-    "marked": "^15.0.7"
+    "marked": "^15.0.7",
+    "uiohook-napi": "^1.5.4"
   },
   "devDependencies": {
     "electron": "^23.3.13",
@@ -60,5 +61,6 @@
       "!**/{appveyor.yml,.travis.yml,circle.yml}",
       "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
     ]
-  }
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }

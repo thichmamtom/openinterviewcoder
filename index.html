@@ -22,10 +22,18 @@
             <h4>Open Interview Coder</h4>
             <div class="shortcuts">
               <div class="shortcut-item">
-                <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>S</kbd>
+                <kbd>⌘</kbd> + <kbd>H</kbd>
                 <span>Take a screenshot</span>
               </div>
               <div class="shortcut-item">
+                <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>C</kbd>
+                <span>Send selection to AI</span>
+                </div>
+                <!-- <div class="shortcut-item">
+                                                  <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>V</kbd>
+                                                  <span>Voice input</span>
+                                                </div> -->
+                <div class="shortcut-item">
                 <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>H</kbd>
                 <span>Hide window</span>
               </div>
@@ -45,6 +53,11 @@
           <span>Building solution...</span>
         </div>
       </div>
+<!-- Speech indicator -->
+<div id="speech-indicator" style="display: none;">
+  <span class="speech-pulse">🎤</span>
+  <span id="speech-text">Listening...</span>
+</div>
     </div>
 
     <!-- Scripts -->

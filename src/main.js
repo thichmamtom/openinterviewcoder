@@ -6,23 +6,33 @@ const {
   ipcMain,
   screen,
   desktopCapturer,
+  clipboard,
   Menu,
   Tray,
 } = require("electron");
 const path = require("path");
+const { execSync } = require("child_process");
+const { uIOhook, UiohookWheelEvent } = require("uiohook-napi");
 const {
   ensureScreenRecordingPermission,
   captureFullScreen,
   getRecentScreenshots,
 } = require("./screenshot");
-const { initializeLLMService } = require("./llm-service");
+const { initializeLLMService, resetConversationHistory } = require("./llm-service");
 const config = require("./config");
 
 // IPC handlers for settings
 ipcMain.handle("get-settings", () => {
   return {
     openaiKey: config.getOpenAIKey(),
+    customPrompt: config.getCustomPrompt(),
+    model: config.getModel(),
+    availableModels: config.AVAILABLE_MODELS,
   };
+});
+
+ipcMain.handle("get-default-prompt", () => {
+  return config.DEFAULT_PROMPT;
 });
 
 // IPC handler for scrolling chat
@@ -39,6 +49,12 @@ ipcMain.handle("save-settings", async (event, settings) => {
     // Reinitialize LLM service with new API key
     await initializeLLMService();
   }
+  if (typeof settings.customPrompt === "string") {
+    config.setCustomPrompt(settings.customPrompt);
+  }
+  if (settings.model) {
+    config.setModel(settings.model);
+  }
   return true;
 });
 
@@ -52,6 +68,8 @@ ipcMain.handle("reset-chat", (event) => {
   if (invisibleWindow) {
     invisibleWindow.webContents.send("reset-chat");
   }
+  // Also clear backend conversation memory
+  resetConversationHistory();
   return true;
 });
 
@@ -209,6 +227,34 @@ function createInvisibleWindow() {
 
   // Show window initially
   invisibleWindow.showInactive();
+
+  // Set up global wheel event capture using uiohook
+  setupGlobalWheelCapture();
+}
+
+// Set up global wheel event capture using uiohook-napi
+function setupGlobalWheelCapture() {
+  uIOhook.on("wheel", (event) => {
+    if (!invisibleWindow || !invisibleWindow.isVisible()) return;
+
+    const bounds = invisibleWindow.getBounds();
+    const mouseX = event.x;
+    const mouseY = event.y;
+
+    // Check if mouse is within the overlay window bounds
+    if (
+      mouseX >= bounds.x &&
+      mouseX <= bounds.x + bounds.width &&
+      mouseY >= bounds.y &&
+      mouseY <= bounds.y + bounds.height
+    ) {
+      // event.rotation: positive = scroll down, negative = scroll up
+      const scrollAmount = event.rotation * 50;
+      invisibleWindow.webContents.send("scroll-chat", scrollAmount);
+    }
+  });
+
+  uIOhook.start();
 }
 
 function createSettingsWindow() {
@@ -264,13 +310,7 @@ function registerShortcuts() {
       // Wait for window to hide
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      // Check permission and take screenshot
-      const hasPermission = await ensureScreenRecordingPermission();
-      if (!hasPermission) {
-        console.log("Permission not granted. Skipping screenshot.");
-        return;
-      }
-
+      // Take screenshot (permission already checked at startup)
       const screenshotPath = await captureFullScreen(desktopCapturer, screen);
       if (screenshotPath) {
         console.log("Screenshot saved:", screenshotPath);
@@ -383,6 +423,58 @@ function registerShortcuts() {
   globalShortcut.register("CommandOrControl+Shift+R", () => {
     if (invisibleWindow) {
       invisibleWindow.webContents.send("reset-chat");
+      resetConversationHistory();
+    }
+  });
+
+  // Copy selection and send to AI (Command/Ctrl + Shift + C)
+  globalShortcut.register("CommandOrControl+Shift+C", async () => {
+    if (!invisibleWindow) return;
+
+    try {
+      // Save current clipboard content to restore later
+      const previousClipboard = clipboard.readText();
+
+      // Simulate Cmd+C in the foreground app to copy the current selection
+      if (process.platform === "darwin") {
+        execSync(
+          'osascript -e \'tell application "System Events" to keystroke "c" using command down\''
+        );
+      }
+
+      // Wait for clipboard to update
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      const selectedText = clipboard.readText().trim();
+
+      if (selectedText && selectedText !== previousClipboard) {
+        console.log("Captured selection:", selectedText.substring(0, 100) + "...");
+        // Show overlay if hidden
+        if (!invisibleWindow.isVisible()) {
+          invisibleWindow.showInactive();
+        }
+        // Send selection as a prompt to renderer
+        invisibleWindow.webContents.send("selection-captured", selectedText);
+      } else if (selectedText) {
+        // If clipboard didn't change, the selection might already be in clipboard
+        if (!invisibleWindow.isVisible()) {
+          invisibleWindow.showInactive();
+        }
+        invisibleWindow.webContents.send("selection-captured", selectedText);
+      }
+    } catch (error) {
+      console.error("Failed to capture selection:", error);
+    }
+  });
+
+  // Toggle speech-to-text (Command/Ctrl + Shift + V)
+  globalShortcut.register("CommandOrControl+Shift+V", () => {
+    if (invisibleWindow) {
+      // Show overlay if hidden
+      if (!invisibleWindow.isVisible()) {
+        invisibleWindow.showInactive();
+      }
+      invisibleWindow.webContents.send("toggle-speech");
     }
   });
 
@@ -423,9 +515,34 @@ app.whenReady().then(async () => {
     process.env.OPENAI_API_KEY = apiKey;
   }
 
+  // Ensure all permissions before proceeding (macOS)
+  if (process.platform === "darwin") {
+    const hasScreenPermission = await ensureScreenRecordingPermission();
+    if (!hasScreenPermission) {
+      console.log("Screen recording permission not granted at startup.");
+    }
+
+    // Check accessibility permission (needed for global shortcuts)
+    const { systemPreferences } = require("electron");
+    const isTrusted = systemPreferences.isTrustedAccessibilityClient(true);
+    if (!isTrusted) {
+      console.log("Accessibility permission requested. App may need restart after granting.");
+    }
+  }
+
+  // Prompt user to configure API key if not set
+  if (!config.hasOpenAIKey()) {
+    console.log("No OpenAI API key configured. Opening settings...");
+  }
+
   createInvisibleWindow();
   registerShortcuts();
   await initializeLLMService();
+
+  // Open settings if no API key is configured
+  if (!config.hasOpenAIKey()) {
+    createSettingsWindow();
+  }
 
   // Create tray icon for Windows
   if (process.platform === "win32") {
@@ -458,4 +575,5 @@ app.on("window-all-closed", function () {
 app.on("before-quit", () => {
   app.isQuitting = true;
   globalShortcut.unregisterAll();
+  uIOhook.stop();
 });

@@ -3,31 +3,27 @@ const { ipcMain } = require("electron");
 const fs = require("fs");
 const config = require("./config");
 
-// System prompt for the AI assistant
-const SYSTEM_PROMPT = `You are an invisible AI assistant that analyzes screenshots during meetings and presentations.
-
-Key Responsibilities:
-1. Analyze visual content quickly and efficiently
-2. Provide concise, actionable insights
-3. Identify key information, patterns, and potential issues
-4. Suggest relevant follow-up questions or actions
-
-Guidelines:
-- Keep responses brief and scannable (max 200 words)
-- Use bullet points and clear formatting
-- Highlight important terms using **bold**
-- Focus on actionable insights
-- If code is shown, provide quick technical insights
-- For data/charts, emphasize key trends and anomalies
-- During presentations, note key takeaways and action items
-
-Format your responses in sections:
-• Quick Summary (2-3 sentences)
-• Key Points (3-5 bullets)
-• Suggested Actions (if applicable)
-• Technical Notes (if code/data is present)`;
-
 let isInitialized = false;
+
+// Conversation history — stores past messages for multi-turn context
+// Each entry: { role: "user"|"assistant", content: string|array }
+let conversationHistory = [];
+const MAX_HISTORY_ENTRIES = 100; // 50 message pairs
+
+// Reset conversation history
+function resetConversationHistory() {
+  conversationHistory = [];
+}
+
+// Trim history to stay within limits
+function trimHistory() {
+  if (conversationHistory.length > MAX_HISTORY_ENTRIES) {
+    // Remove oldest messages from the front, keeping the most recent ones
+    conversationHistory = conversationHistory.slice(
+      conversationHistory.length - MAX_HISTORY_ENTRIES
+    );
+  }
+}
 
 // Initialize the LLM service
 async function initializeLLMService() {
@@ -51,6 +47,12 @@ async function initializeLLMService() {
       }
     });
 
+    // IPC handler to reset conversation memory
+    ipcMain.handle("reset-conversation", () => {
+      resetConversationHistory();
+      return true;
+    });
+
     isInitialized = true;
   }
 }
@@ -69,21 +71,17 @@ async function makeLLMRequest(event, data) {
     );
   }
 
-  const requestData = {
-    model: "gpt-4o-mini",
-    input: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text:
-              data.prompt || "Analyze this screenshot and provide insights.",
-          },
-        ],
-      },
-    ],
-  };
+  const systemPrompt = config.getCustomPrompt();
+  const selectedModel = config.getModel();
+  const messageId = Date.now().toString();
+
+  // Build the current user message content
+  const userContent = [
+    {
+      type: "input_text",
+      text: data.prompt || "Analyze this screenshot and provide insights.",
+    },
+  ];
 
   if (data.filePath) {
     if (!fs.existsSync(data.filePath)) {
@@ -91,11 +89,45 @@ async function makeLLMRequest(event, data) {
     }
     const imageBuffer = fs.readFileSync(data.filePath);
     const base64Image = imageBuffer.toString("base64");
-    requestData.input[0].content.push({
+    userContent.push({
       type: "input_image",
       image_url: `data:image/png;base64,${base64Image}`,
     });
   }
+
+  // Add current user message to conversation history
+  conversationHistory.push({
+    role: "user",
+    content: userContent,
+  });
+  trimHistory();
+
+  // Build input: system prompt + full conversation history
+  const requestData = {
+    model: selectedModel,
+    stream: true,
+    input: [
+      {
+        role: "developer",
+        content: systemPrompt,
+      },
+      ...conversationHistory,
+    ],
+  };
+
+  // Add reasoning effort if the model supports it (e.g. gpt-5.2 → low)
+  const modelConfig = config.AVAILABLE_MODELS.find((m) => m.id === selectedModel);
+  if (modelConfig && modelConfig.reasoning) {
+    requestData.reasoning = { effort: modelConfig.reasoning };
+  }
+
+  // Notify renderer that streaming has started
+  event.sender.send("stream-update", {
+    messageId,
+    content: "",
+    isComplete: false,
+    status: "streaming",
+  });
 
   try {
     const response = await axios({
@@ -106,14 +138,73 @@ async function makeLLMRequest(event, data) {
         Authorization: `Bearer ${apiKey}`,
       },
       data: requestData,
+      responseType: "stream",
     });
 
-    const content = response.data.output[0].content[0].text;
-    const messageId = Date.now().toString();
+    let fullContent = "";
 
+    await new Promise((resolve, reject) => {
+      let buffer = "";
+
+      response.data.on("data", (chunk) => {
+        buffer += chunk.toString();
+
+        // Process complete SSE lines
+        const lines = buffer.split("\n");
+        buffer = lines.pop(); // Keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+
+          const jsonStr = line.slice(6).trim();
+          if (jsonStr === "[DONE]") {
+            continue;
+          }
+
+          try {
+            const parsed = JSON.parse(jsonStr);
+
+            // Handle output_text.delta events
+            if (parsed.type === "response.output_text.delta" && parsed.delta) {
+              fullContent += parsed.delta;
+              event.sender.send("stream-update", {
+                messageId,
+                content: fullContent,
+                isComplete: false,
+                status: "streaming",
+              });
+            }
+
+            // Handle completion
+            if (parsed.type === "response.completed") {
+              resolve();
+            }
+          } catch (e) {
+            // Skip unparseable lines
+          }
+        }
+      });
+
+      response.data.on("end", () => {
+        resolve();
+      });
+
+      response.data.on("error", (err) => {
+        reject(err);
+      });
+    });
+
+    // Store assistant response in conversation history
+    conversationHistory.push({
+      role: "assistant",
+      content: fullContent,
+    });
+    trimHistory();
+
+    // Send final complete message
     event.sender.send("stream-update", {
       messageId,
-      content,
+      content: fullContent,
       isComplete: true,
       status: "completed",
     });
@@ -122,19 +213,25 @@ async function makeLLMRequest(event, data) {
       success: true,
       messageId,
       provider: "openai",
-      model: "gpt-4o-mini",
+      model: selectedModel,
       status: "completed",
     };
   } catch (error) {
+    // Remove the user message we just added since the request failed
+    conversationHistory.pop();
+
     if (error.response) {
       if (error.response.status === 401) {
         throw new Error(
           "Invalid API key. Please check your OpenAI API key in settings."
         );
       }
-      throw new Error(
-        `API Error: ${error.response.data.error?.message || error.message}`
-      );
+      // For streaming errors, the response body may be a stream
+      let errorMessage = error.message;
+      if (error.response.data && typeof error.response.data === "object" && error.response.data.error) {
+        errorMessage = error.response.data.error.message || error.message;
+      }
+      throw new Error(`API Error: ${errorMessage}`);
     } else if (error.request) {
       throw new Error(
         "No response received from OpenAI API. Please check your internet connection."
@@ -146,4 +243,5 @@ async function makeLLMRequest(event, data) {
 
 module.exports = {
   initializeLLMService,
+  resetConversationHistory,
 };

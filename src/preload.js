@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Show settings window
   showSettings: () => ipcRenderer.invoke("show-settings"),
 
+  // Get default prompt
+  getDefaultPrompt: () => ipcRenderer.invoke("get-default-prompt"),
+
   // Window controls
   minimizeWindow: () => ipcRenderer.invoke("minimize-window"),
   hideWindow: () => ipcRenderer.invoke("hide-window"),
@@ -39,6 +42,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onResetChat: (callback) =>
     ipcRenderer.on("reset-chat", (event) => callback()),
 
+  // Reset conversation memory (backend)
+  resetConversation: () => ipcRenderer.invoke("reset-conversation"),
+
   // Window position
   onWindowPositionChanged: (callback) =>
     ipcRenderer.on("window-position-changed", (event, value) =>
@@ -49,6 +55,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Scroll chat
   onScrollChat: (callback) =>
     ipcRenderer.on("scroll-chat", (event, direction) => callback(direction)),
+
+  // Selection capture (Cmd+Shift+C)
+  onSelectionCaptured: (callback) =>
+    ipcRenderer.on("selection-captured", (event, text) => callback(text)),
+
+  // Speech-to-text toggle (Cmd+Shift+V)
+  onToggleSpeech: (callback) =>
+    ipcRenderer.on("toggle-speech", (event) => callback()),
 
   // Click-through mode
   onToggleMouseIgnore: (callback) =>

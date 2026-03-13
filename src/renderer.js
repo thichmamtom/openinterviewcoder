@@ -4,6 +4,8 @@ const typingIndicator = document.getElementById("typing-indicator");
 
 // Chat state
 let messages = [];
+let speechRecognition = null;
+let isListening = false;
 
 // Initialize marked with options
 if (typeof marked === "undefined") {
@@ -39,17 +41,33 @@ function setupEventListeners() {
   // Handle response updates
   window.electronAPI.onStreamUpdate(updateMessage);
 
-  // Handle chat scrolling
+  // Handle chat scrolling via keyboard shortcuts and global wheel events
   window.electronAPI.onScrollChat((direction) => {
     const chatContainer = document.querySelector(".chat-container");
     if (chatContainer) {
-      if (direction === "up") {
-        chatContainer.scrollTop -= 100; // Scroll up by 100px
+      if (typeof direction === "number") {
+        // Numeric delta from uiohook global wheel capture
+        chatContainer.scrollTop += direction;
+      } else if (direction === "up") {
+        chatContainer.scrollTop -= 100;
       } else if (direction === "down") {
-        chatContainer.scrollTop += 100; // Scroll down by 100px
+        chatContainer.scrollTop += 100;
       }
     }
   });
+
+  // Handle selection capture (Cmd+Shift+C)
+  window.electronAPI.onSelectionCaptured((text) => {
+    if (text) {
+      showToast("📋 Selection captured");
+      handleTestResponse(text);
+    }
+  });
+
+  // // Handle speech toggle (Cmd+Shift+V)
+  // window.electronAPI.onToggleSpeech(() => {
+  //   toggleSpeechRecognition();
+  // });
 }
 
 // Handle keyboard shortcuts
@@ -213,6 +231,8 @@ async function addScreenshotToChat(data) {
 function resetChat() {
   chatHistory.innerHTML = "";
   messages = [];
+  // Also clear backend conversation memory
+  window.electronAPI.resetConversation();
   updateNullStateVisibility();
 }
 
@@ -287,4 +307,112 @@ async function handleTestResponse(prompt) {
     typingIndicator.classList.remove("visible");
     addErrorMessage(error.message);
   }
+}
+
+// Speech-to-text using Web Speech API
+function toggleSpeechRecognition() {
+  if (isListening) {
+    stopSpeechRecognition();
+    return;
+  }
+
+  const SpeechRecognition =
+    window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  if (!SpeechRecognition) {
+    showToast("⚠️ Speech recognition not supported");
+    return;
+  }
+
+  speechRecognition = new SpeechRecognition();
+  speechRecognition.continuous = true;
+  speechRecognition.interimResults = true;
+  speechRecognition.lang = "en-US";
+
+  let finalTranscript = "";
+  let interimTranscript = "";
+
+  speechRecognition.onstart = () => {
+    isListening = true;
+    showSpeechIndicator(true);
+    showToast("🎤 Listening...");
+  };
+
+  speechRecognition.onresult = (event) => {
+    interimTranscript = "";
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      if (event.results[i].isFinal) {
+        finalTranscript += event.results[i][0].transcript + " ";
+      } else {
+        interimTranscript += event.results[i][0].transcript;
+      }
+    }
+    // Update the speech indicator with live transcript
+    updateSpeechText(finalTranscript + interimTranscript);
+  };
+
+  speechRecognition.onerror = (event) => {
+    console.error("Speech recognition error:", event.error);
+    if (event.error !== "aborted") {
+      showToast(`⚠️ Speech error: ${event.error}`);
+    }
+    stopSpeechRecognition();
+  };
+
+  speechRecognition.onend = () => {
+    isListening = false;
+    showSpeechIndicator(false);
+
+    const transcript = finalTranscript.trim();
+    if (transcript) {
+      showToast("✅ Sending to AI...");
+      handleTestResponse(transcript);
+    }
+  };
+
+  speechRecognition.start();
+}
+
+function stopSpeechRecognition() {
+  if (speechRecognition) {
+    speechRecognition.stop();
+    speechRecognition = null;
+  }
+  isListening = false;
+  showSpeechIndicator(false);
+}
+
+function showSpeechIndicator(show) {
+  const indicator = document.getElementById("speech-indicator");
+  if (indicator) {
+    indicator.style.display = show ? "flex" : "none";
+  }
+}
+
+function updateSpeechText(text) {
+  const speechText = document.getElementById("speech-text");
+  if (speechText) {
+    speechText.textContent = text || "Listening...";
+  }
+}
+
+// Toast notification
+function showToast(message) {
+  const existing = document.getElementById("toast");
+  if (existing) existing.remove();
+
+  const toast = document.createElement("div");
+  toast.id = "toast";
+  toast.textContent = message;
+  document.body.appendChild(toast);
+
+  // Trigger animation
+  requestAnimationFrame(() => {
+    toast.classList.add("visible");
+  });
+
+  setTimeout(() => {
+    toast.classList.remove("visible");
+    setTimeout(() => toast.remove(), 300);
+  }, 2000);
 }
