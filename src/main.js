@@ -12,14 +12,22 @@ const {
 } = require("electron");
 const path = require("path");
 const { execSync } = require("child_process");
-const { uIOhook, UiohookWheelEvent } = require("uiohook-napi");
+const { uIOhook } = require("uiohook-napi");
 const {
   ensureScreenRecordingPermission,
   captureFullScreen,
   getRecentScreenshots,
 } = require("./screenshot");
 const { initializeLLMService, resetConversationHistory } = require("./llm-service");
+const { initMain: initLoopbackAudio } = require("electron-audio-loopback");
 const config = require("./config");
+
+initLoopbackAudio({
+  sourcesOptions: {
+    types: ["screen"],
+    thumbnailSize: { width: 0, height: 0 },
+  },
+});
 
 // IPC handlers for settings
 ipcMain.handle("get-settings", () => {
@@ -28,11 +36,28 @@ ipcMain.handle("get-settings", () => {
     customPrompt: config.getCustomPrompt(),
     model: config.getModel(),
     availableModels: config.AVAILABLE_MODELS,
+    mousePassthrough: config.getMousePassthrough(),
   };
 });
 
 ipcMain.handle("get-default-prompt", () => {
   return config.DEFAULT_PROMPT;
+});
+
+ipcMain.handle("get-usage", () => {
+  return config.getUsage();
+});
+
+ipcMain.handle("reset-usage", () => {
+  return config.resetUsage();
+});
+
+config.onUsageUpdated((usage) => {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.webContents.isDestroyed()) {
+      window.webContents.send("usage-updated", usage);
+    }
+  });
 });
 
 // IPC handler for scrolling chat
@@ -54,6 +79,10 @@ ipcMain.handle("save-settings", async (event, settings) => {
   }
   if (settings.model) {
     config.setModel(settings.model);
+  }
+  if (typeof settings.mousePassthrough === "boolean") {
+    config.setMousePassthrough(settings.mousePassthrough);
+    setMousePassthrough(settings.mousePassthrough);
   }
   return true;
 });
@@ -111,6 +140,46 @@ ipcMain.handle("hide-window", () => {
 let invisibleWindow;
 let settingsWindow = null;
 let tray = null;
+let mousePassthrough = config.getMousePassthrough();
+
+function setMousePassthrough(enabled, options = {}) {
+  mousePassthrough = Boolean(enabled);
+
+  if (!invisibleWindow) return mousePassthrough;
+
+  invisibleWindow.setIgnoreMouseEvents(mousePassthrough);
+  invisibleWindow.webContents.isIgnoringMouseEvents = mousePassthrough;
+
+  if (options.notify !== false && !invisibleWindow.webContents.isDestroyed()) {
+    invisibleWindow.webContents.send("toggle-mouse-ignore", mousePassthrough);
+  }
+
+  return mousePassthrough;
+}
+
+function configureMediaPermissions() {
+  if (!invisibleWindow || invisibleWindow.webContents.isDestroyed()) return;
+
+  const overlayWebContentsId = invisibleWindow.webContents.id;
+  const appSession = invisibleWindow.webContents.session;
+
+  const isOverlayAudioRequest = (webContents, permission, details = {}) => {
+    if (!webContents || webContents.id !== overlayWebContentsId) return false;
+    if (permission !== "media") return false;
+
+    const mediaTypes = Array.isArray(details.mediaTypes) ? details.mediaTypes : [];
+    const includesVideo = mediaTypes.includes("video");
+    return !includesVideo && (mediaTypes.length === 0 || mediaTypes.includes("audio"));
+  };
+
+  appSession.setPermissionCheckHandler((webContents, permission, origin, details) =>
+    isOverlayAudioRequest(webContents, permission, details)
+  );
+
+  appSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    callback(isOverlayAudioRequest(webContents, permission, details));
+  });
+}
 
 // Create shared menu template
 function createMenuTemplate() {
@@ -186,6 +255,8 @@ function createInvisibleWindow() {
     },
   });
 
+  configureMediaPermissions();
+
   // Set window type to utility on macOS
   if (process.platform === "darwin") {
     invisibleWindow.setAlwaysOnTop(true, "utility", 1);
@@ -196,11 +267,13 @@ function createInvisibleWindow() {
   // Set content protection to prevent screen capture
   invisibleWindow.setContentProtection(true);
 
-  // Always ignore mouse events to prevent interaction with screen sharing
-  invisibleWindow.setIgnoreMouseEvents(true);
-  invisibleWindow.webContents.isIgnoringMouseEvents = true;
+  // Mouse passthrough keeps the overlay click-through by default.
+  setMousePassthrough(mousePassthrough, { notify: false });
 
   invisibleWindow.loadFile("index.html");
+  invisibleWindow.webContents.once("did-finish-load", () => {
+    setMousePassthrough(mousePassthrough);
+  });
 
   // Open DevTools in development
   if (process.argv.includes("--debug")) {
@@ -236,6 +309,7 @@ function createInvisibleWindow() {
 function setupGlobalWheelCapture() {
   uIOhook.on("wheel", (event) => {
     if (!invisibleWindow || !invisibleWindow.isVisible()) return;
+    if (!mousePassthrough) return;
 
     const bounds = invisibleWindow.getBounds();
     const mouseX = event.x;
@@ -476,6 +550,13 @@ function registerShortcuts() {
       }
       invisibleWindow.webContents.send("toggle-speech");
     }
+  });
+
+  // Toggle mouse passthrough. Off lets Chromium handle native wheel scrolling.
+  globalShortcut.register("CommandOrControl+Shift+M", () => {
+    const enabled = !mousePassthrough;
+    config.setMousePassthrough(enabled);
+    setMousePassthrough(enabled);
   });
 
   // Chat scrolling shortcuts

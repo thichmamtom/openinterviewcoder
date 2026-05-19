@@ -15,7 +15,7 @@
       <div class="chat-container">
         <div id="null-state" class="null-state">
           <div class="null-state-content">
-            <!-- octo logo, with animation -->
+            <!-- octo logo -->
             <div class="octo-logo">
               <img src="assets/OCTO.png" alt="Octo" />
             </div>
@@ -28,12 +28,12 @@
               <div class="shortcut-item">
                 <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>C</kbd>
                 <span>Send selection to AI</span>
-                </div>
-                <!-- <div class="shortcut-item">
-                                                  <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>V</kbd>
-                                                  <span>Voice input</span>
-                                                </div> -->
-                <div class="shortcut-item">
+              </div>
+              <div class="shortcut-item">
+                <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>V</kbd>
+                <span>Listen to system audio</span>
+              </div>
+              <div class="shortcut-item">
                 <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>H</kbd>
                 <span>Hide window</span>
               </div>
@@ -45,19 +45,22 @@
                 <kbd>⌘</kbd> + <kbd>,</kbd>
                 <span>Open settings</span>
               </div>
+              <div class="shortcut-item">
+                <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>M</kbd>
+                <span>Toggle mouse passthrough</span>
+              </div>
             </div>
           </div>
         </div>
         <div id="chat-history"></div>
-        <div id="typing-indicator" class="typing-indicator">
-          <span>Building solution...</span>
-        </div>
       </div>
-<!-- Speech indicator -->
-<div id="speech-indicator" style="display: none;">
-  <span class="speech-pulse">🎤</span>
-  <span id="speech-text">Listening...</span>
-</div>
+      <div
+        id="speech-status"
+        class="speech-status"
+        role="status"
+        aria-live="polite"
+        hidden
+      ></div>
     </div>
 
     <!-- Scripts -->

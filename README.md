@@ -89,6 +89,7 @@ The built applications will be available in the `dist` directory.
    - `Cmd/Ctrl + Shift + S`: Take a screenshot
    - `Cmd/Ctrl + Shift + H`: Toggle assistant visibility
    - `Cmd/Ctrl + ←/→/↑/↓`: Move the assistant window
+   - `Cmd/Ctrl + Shift + M`: Toggle mouse passthrough for native overlay scrolling
    - `Cmd + ,`: Open settings
 
 3. The assistant will appear as an overlay on your screen during screen sharing sessions

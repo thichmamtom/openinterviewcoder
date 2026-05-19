@@ -1,11 +1,22 @@
 // DOM Elements
 const chatHistory = document.getElementById("chat-history");
-const typingIndicator = document.getElementById("typing-indicator");
+const speechStatus = document.getElementById("speech-status");
 
 // Chat state
 let messages = [];
-let speechRecognition = null;
-let isListening = false;
+
+// System audio transcription state
+let audioStream = null;
+let audioContext = null;
+let audioSource = null;
+let audioProcessor = null;
+let silentGain = null;
+let transcriptionSessionId = null;
+let isListeningToSystemAudio = false;
+let isStoppingSystemAudio = false;
+let currentTranscriptDelta = "";
+let finalTranscriptSegments = [];
+const TRANSCRIPTION_FINALIZE_DELAY_MS = 1800;
 
 // Initialize marked with options
 if (typeof marked === "undefined") {
@@ -22,8 +33,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupEventListeners();
 });
 
+function setMousePassthroughState(enabled) {
+  const value = enabled ? "true" : "false";
+  document.documentElement.setAttribute("data-mouse-passthrough", value);
+  document.body.setAttribute("data-mouse-passthrough", value);
+}
+
 // Set up event listeners
 function setupEventListeners() {
+  window.electronAPI
+    .getSettings()
+    .then((settings) =>
+      setMousePassthroughState(settings.mousePassthrough !== false)
+    )
+    .catch((error) => console.error("Error loading mouse setting:", error));
+
   // Window position update
   window.electronAPI.onWindowPositionChanged((position) => {
     document.body.setAttribute("data-position", position);
@@ -56,18 +80,277 @@ function setupEventListeners() {
     }
   });
 
+  window.electronAPI.onToggleMouseIgnore((enabled) => {
+    setMousePassthroughState(enabled);
+  });
+
   // Handle selection capture (Cmd+Shift+C)
   window.electronAPI.onSelectionCaptured((text) => {
     if (text) {
-      showToast("📋 Selection captured");
       handleTestResponse(text);
     }
   });
 
-  // // Handle speech toggle (Cmd+Shift+V)
-  // window.electronAPI.onToggleSpeech(() => {
-  //   toggleSpeechRecognition();
-  // });
+  // Handle speech toggle (Cmd+Shift+V)
+  window.electronAPI.onToggleSpeech(() => {
+    toggleSpeechRecording();
+  });
+
+  window.electronAPI.onAudioTranscriptionDelta((data) => {
+    if (!data || data.sessionId !== transcriptionSessionId) return;
+    currentTranscriptDelta += data.delta || "";
+    setSpeechStatus("listening", currentTranscriptDelta || "Listening to system audio...");
+  });
+
+  window.electronAPI.onAudioTranscriptionCompleted((data) => {
+    if (!data || data.sessionId !== transcriptionSessionId) return;
+    const transcript = (data.transcript || "").trim();
+    if (transcript) {
+      finalTranscriptSegments.push(transcript);
+    }
+    currentTranscriptDelta = "";
+    setSpeechStatus("listening", "Listening to system audio...");
+  });
+
+  window.electronAPI.onAudioTranscriptionStatus((data) => {
+    if (!data || data.sessionId !== transcriptionSessionId) return;
+    if (data.status === "speech_started") {
+      setSpeechStatus("listening", "Listening to system audio...");
+    }
+  });
+
+  window.electronAPI.onAudioTranscriptionError((data) => {
+    if (!data || data.sessionId !== transcriptionSessionId) return;
+    const message = data.error || "System audio transcription failed.";
+    console.error("System audio transcription error:", message);
+    setSpeechStatus("error", message);
+    addErrorMessage(message);
+  });
+}
+
+async function toggleSpeechRecording() {
+  if (isStoppingSystemAudio) {
+    setSpeechStatus("transcribing", "Finalizing transcript...");
+    return;
+  }
+
+  if (isListeningToSystemAudio) {
+    await stopSpeechRecording();
+    return;
+  }
+
+  await startSpeechRecording();
+}
+
+async function startSpeechRecording() {
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      throw new Error("System audio capture is not supported.");
+    }
+
+    finalTranscriptSegments = [];
+    currentTranscriptDelta = "";
+    setSpeechStatus("transcribing", "Connecting to system audio...");
+
+    audioStream = await getSystemAudioStream();
+    const result = await window.electronAPI.startAudioTranscription({
+      model: "gpt-realtime-whisper",
+      language: "en",
+    });
+    transcriptionSessionId = result.sessionId;
+
+    startAudioStreaming(audioStream);
+    isListeningToSystemAudio = true;
+    setSpeechStatus("listening", "Listening to system audio...");
+  } catch (error) {
+    console.error("Error starting system audio transcription:", error);
+    cleanupSpeechRecording();
+    setSpeechStatus("error", error.message);
+    addErrorMessage(error.message);
+  }
+}
+
+async function getSystemAudioStream() {
+  await window.electronAPI.enableLoopbackAudio();
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: true,
+    });
+
+    stream.getVideoTracks().forEach((track) => {
+      track.stop();
+      stream.removeTrack(track);
+    });
+
+    if (stream.getAudioTracks().length === 0) {
+      throw new Error("No system audio track was captured.");
+    }
+
+    return stream;
+  } finally {
+    window.electronAPI
+      .disableLoopbackAudio()
+      .catch((error) => console.error("Failed to disable loopback mode:", error));
+  }
+}
+
+function startAudioStreaming(stream) {
+  const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextConstructor) {
+    throw new Error("Web Audio is not supported.");
+  }
+
+  audioContext = new AudioContextConstructor({ sampleRate: 24000 });
+  audioSource = audioContext.createMediaStreamSource(stream);
+  audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+  silentGain = audioContext.createGain();
+  silentGain.gain.value = 0;
+
+  audioProcessor.onaudioprocess = (event) => {
+    if (!transcriptionSessionId || isStoppingSystemAudio) return;
+
+    const input = event.inputBuffer.getChannelData(0);
+    const output = event.outputBuffer.getChannelData(0);
+    output.fill(0);
+
+    const audio = float32ToPcm16Base64(input);
+    window.electronAPI
+      .appendAudioTranscription({
+        sessionId: transcriptionSessionId,
+        audio,
+      })
+      .catch((error) => {
+        console.error("Failed to append audio chunk:", error);
+        setSpeechStatus("error", error.message);
+      });
+  };
+
+  audioSource.connect(audioProcessor);
+  audioProcessor.connect(silentGain);
+  silentGain.connect(audioContext.destination);
+}
+
+async function stopSpeechRecording() {
+  if (!isListeningToSystemAudio && !transcriptionSessionId) {
+    cleanupSpeechRecording();
+    return;
+  }
+
+  isStoppingSystemAudio = true;
+  isListeningToSystemAudio = false;
+  setSpeechStatus("transcribing", "Finalizing transcript...");
+
+  try {
+    stopAudioGraph();
+
+    if (transcriptionSessionId) {
+      await window.electronAPI.stopAudioTranscription({
+        sessionId: transcriptionSessionId,
+      });
+      await delay(TRANSCRIPTION_FINALIZE_DELAY_MS);
+    }
+
+    const transcript = getCollectedTranscript();
+    cleanupSpeechRecording();
+
+    if (transcript) {
+      clearSpeechStatus();
+      handleTestResponse(transcript);
+    } else {
+      setSpeechStatus("error", "No system audio transcript was captured.");
+    }
+  } catch (error) {
+    console.error("Error stopping system audio transcription:", error);
+    cleanupSpeechRecording();
+    setSpeechStatus("error", error.message);
+    addErrorMessage(error.message);
+  }
+}
+
+function stopAudioGraph() {
+  if (audioProcessor) {
+    audioProcessor.disconnect();
+    audioProcessor.onaudioprocess = null;
+  }
+
+  if (audioSource) {
+    audioSource.disconnect();
+  }
+
+  if (silentGain) {
+    silentGain.disconnect();
+  }
+
+  if (audioContext && audioContext.state !== "closed") {
+    audioContext.close().catch(() => {});
+  }
+
+  audioProcessor = null;
+  audioSource = null;
+  silentGain = null;
+  audioContext = null;
+}
+
+function cleanupSpeechRecording() {
+  stopAudioGraph();
+
+  if (audioStream) {
+    audioStream.getTracks().forEach((track) => track.stop());
+  }
+
+  audioStream = null;
+  transcriptionSessionId = null;
+  isListeningToSystemAudio = false;
+  isStoppingSystemAudio = false;
+  currentTranscriptDelta = "";
+  finalTranscriptSegments = [];
+}
+
+function getCollectedTranscript() {
+  return [...finalTranscriptSegments, currentTranscriptDelta]
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function float32ToPcm16Base64(samples) {
+  const buffer = new ArrayBuffer(samples.length * 2);
+  const view = new DataView(buffer);
+
+  for (let i = 0; i < samples.length; i += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+  }
+
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+
+  return btoa(binary);
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function setSpeechStatus(state, message) {
+  if (!speechStatus) return;
+
+  speechStatus.hidden = false;
+  speechStatus.textContent = message;
+  speechStatus.setAttribute("data-state", state);
+}
+
+function clearSpeechStatus() {
+  if (!speechStatus) return;
+
+  speechStatus.hidden = true;
+  speechStatus.textContent = "";
+  speechStatus.removeAttribute("data-state");
 }
 
 // Handle keyboard shortcuts
@@ -91,31 +374,18 @@ function scrollToBottom() {
   const chatContainer = document.querySelector(".chat-container");
   if (chatContainer) {
     chatContainer.scrollTop = chatContainer.scrollHeight;
-    // Double-check scroll after a short delay to handle dynamic content
-    setTimeout(() => {
-      chatContainer.scrollTop = chatContainer.scrollHeight;
-    }, 100);
   }
 }
 
 // Update message
 function updateMessage(data) {
   const { messageId, content, isComplete } = data;
-  console.log("updateMessage called:", {
-    messageId,
-    contentLength: content.length,
-    isComplete,
-  });
 
   // Find or create message element
   let messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
   if (!messageEl) {
-    console.log("Creating new message element");
     messageEl = createMessageElement(messageId);
     chatHistory.appendChild(messageEl);
-    // Show typing indicator for new messages
-    typingIndicator.classList.add("visible");
-    console.log("Typing indicator shown");
     updateNullStateVisibility();
   }
 
@@ -133,9 +403,6 @@ function updateMessage(data) {
 
   // Handle completion
   if (isComplete) {
-    console.log("Message complete, hiding typing indicator");
-    typingIndicator.classList.remove("visible");
-
     // Update the message in the messages array
     const messageIndex = messages.findIndex((m) => m.messageId === messageId);
     if (messageIndex !== -1) {
@@ -194,10 +461,6 @@ async function addScreenshotToChat(data) {
   scrollToBottom();
 
   try {
-    // Show typing indicator before analyzing screenshot
-    typingIndicator.classList.add("visible");
-    console.log("Showing typing indicator for screenshot analysis");
-
     const result = await window.electronAPI.analyzeScreenshot({
       filePath: data.filePath,
       history: messages
@@ -222,7 +485,6 @@ async function addScreenshotToChat(data) {
       status: "pending",
     });
   } catch (error) {
-    typingIndicator.classList.remove("visible");
     addErrorMessage(error.message);
   }
 }
@@ -259,10 +521,6 @@ async function handleTestResponse(prompt) {
     userMessageEl.textContent = prompt;
     chatHistory.appendChild(userMessageEl);
 
-    // Show typing indicator
-    typingIndicator.classList.add("visible");
-    console.log("Showing typing indicator for new test response");
-
     // Add assistant message placeholder
     const messageId = Date.now().toString();
     const assistantMessage = {
@@ -291,128 +549,14 @@ async function handleTestResponse(prompt) {
       } else {
         contentWrapper.innerHTML = ""; // Clear content if it's null/undefined or not a string
       }
-      assistantMessageEl.classList.remove("loading");
       scrollToBottom();
     }
 
     // Update the message in the messages array
     assistantMessage.content = result.content;
     assistantMessage.status = "completed";
-
-    // Hide typing indicator
-    typingIndicator.classList.remove("visible");
-    console.log("Test response complete, hiding typing indicator");
   } catch (error) {
     console.error("Error in handleTestResponse:", error);
-    typingIndicator.classList.remove("visible");
     addErrorMessage(error.message);
   }
-}
-
-// Speech-to-text using Web Speech API
-function toggleSpeechRecognition() {
-  if (isListening) {
-    stopSpeechRecognition();
-    return;
-  }
-
-  const SpeechRecognition =
-    window.SpeechRecognition || window.webkitSpeechRecognition;
-
-  if (!SpeechRecognition) {
-    showToast("⚠️ Speech recognition not supported");
-    return;
-  }
-
-  speechRecognition = new SpeechRecognition();
-  speechRecognition.continuous = true;
-  speechRecognition.interimResults = true;
-  speechRecognition.lang = "en-US";
-
-  let finalTranscript = "";
-  let interimTranscript = "";
-
-  speechRecognition.onstart = () => {
-    isListening = true;
-    showSpeechIndicator(true);
-    showToast("🎤 Listening...");
-  };
-
-  speechRecognition.onresult = (event) => {
-    interimTranscript = "";
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      if (event.results[i].isFinal) {
-        finalTranscript += event.results[i][0].transcript + " ";
-      } else {
-        interimTranscript += event.results[i][0].transcript;
-      }
-    }
-    // Update the speech indicator with live transcript
-    updateSpeechText(finalTranscript + interimTranscript);
-  };
-
-  speechRecognition.onerror = (event) => {
-    console.error("Speech recognition error:", event.error);
-    if (event.error !== "aborted") {
-      showToast(`⚠️ Speech error: ${event.error}`);
-    }
-    stopSpeechRecognition();
-  };
-
-  speechRecognition.onend = () => {
-    isListening = false;
-    showSpeechIndicator(false);
-
-    const transcript = finalTranscript.trim();
-    if (transcript) {
-      showToast("✅ Sending to AI...");
-      handleTestResponse(transcript);
-    }
-  };
-
-  speechRecognition.start();
-}
-
-function stopSpeechRecognition() {
-  if (speechRecognition) {
-    speechRecognition.stop();
-    speechRecognition = null;
-  }
-  isListening = false;
-  showSpeechIndicator(false);
-}
-
-function showSpeechIndicator(show) {
-  const indicator = document.getElementById("speech-indicator");
-  if (indicator) {
-    indicator.style.display = show ? "flex" : "none";
-  }
-}
-
-function updateSpeechText(text) {
-  const speechText = document.getElementById("speech-text");
-  if (speechText) {
-    speechText.textContent = text || "Listening...";
-  }
-}
-
-// Toast notification
-function showToast(message) {
-  const existing = document.getElementById("toast");
-  if (existing) existing.remove();
-
-  const toast = document.createElement("div");
-  toast.id = "toast";
-  toast.textContent = message;
-  document.body.appendChild(toast);
-
-  // Trigger animation
-  requestAnimationFrame(() => {
-    toast.classList.add("visible");
-  });
-
-  setTimeout(() => {
-    toast.classList.remove("visible");
-    setTimeout(() => toast.remove(), 300);
-  }, 2000);
 }

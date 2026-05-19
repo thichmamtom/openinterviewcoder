@@ -1,4 +1,5 @@
 const Store = require("electron-store");
+const { EventEmitter } = require("events");
 
 const DEFAULT_PROMPT = `You are an invisible AI assistant that analyzes screenshots during meetings and presentations.
 
@@ -37,6 +38,67 @@ const AVAILABLE_MODELS = [
   { id: "o3-mini", name: "o3-mini", description: "Reasoning, affordable" },
 ];
 
+function createDefaultUsage() {
+  return {
+    text: {
+      requests: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      cachedTokens: 0,
+      reasoningTokens: 0,
+    },
+    transcription: {
+      sessions: 0,
+      finalTranscripts: 0,
+      audioSeconds: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      audioTokens: 0,
+    },
+    updatedAt: null,
+  };
+}
+
+function mergeUsageWithDefaults(usage = {}) {
+  const defaults = createDefaultUsage();
+  return {
+    text: {
+      ...defaults.text,
+      ...(usage.text || {}),
+    },
+    transcription: {
+      ...defaults.transcription,
+      ...(usage.transcription || {}),
+    },
+    updatedAt: usage.updatedAt || null,
+  };
+}
+
+function getNumber(value) {
+  return Number.isFinite(value) ? value : 0;
+}
+
+function normalizeTokenUsage(usage = {}) {
+  const inputDetails =
+    usage.input_tokens_details || usage.input_token_details || {};
+  const outputDetails =
+    usage.output_tokens_details || usage.output_token_details || {};
+
+  return {
+    inputTokens: getNumber(usage.input_tokens),
+    outputTokens: getNumber(usage.output_tokens),
+    totalTokens: getNumber(usage.total_tokens),
+    cachedTokens: getNumber(inputDetails.cached_tokens),
+    reasoningTokens: getNumber(outputDetails.reasoning_tokens),
+    audioTokens:
+      getNumber(inputDetails.audio_tokens) +
+      getNumber(outputDetails.audio_tokens) +
+      getNumber(usage.audio_tokens),
+  };
+}
+
 const store = new Store({
   defaults: {
     openai: {
@@ -44,8 +106,15 @@ const store = new Store({
     },
     model: DEFAULT_MODEL,
     customPrompt: DEFAULT_PROMPT,
+    mousePassthrough: true,
+    usage: createDefaultUsage(),
   },
 });
+const usageEvents = new EventEmitter();
+
+function emitUsageUpdated(usage) {
+  usageEvents.emit("usage-updated", usage);
+}
 
 module.exports = {
   getOpenAIKey: () => store.get("openai.apiKey") || "",
@@ -55,6 +124,49 @@ module.exports = {
   setCustomPrompt: (prompt) => store.set("customPrompt", prompt),
   getModel: () => store.get("model") || DEFAULT_MODEL,
   setModel: (model) => store.set("model", model),
+  getMousePassthrough: () => store.get("mousePassthrough") !== false,
+  setMousePassthrough: (enabled) =>
+    store.set("mousePassthrough", Boolean(enabled)),
+  getUsage: () => mergeUsageWithDefaults(store.get("usage")),
+  resetUsage: () => {
+    const usage = createDefaultUsage();
+    store.set("usage", usage);
+    emitUsageUpdated(usage);
+    return usage;
+  },
+  recordTextUsage: (usage) => {
+    const current = mergeUsageWithDefaults(store.get("usage"));
+    const normalized = normalizeTokenUsage(usage);
+    current.text.requests += 1;
+    current.text.inputTokens += normalized.inputTokens;
+    current.text.outputTokens += normalized.outputTokens;
+    current.text.totalTokens += normalized.totalTokens;
+    current.text.cachedTokens += normalized.cachedTokens;
+    current.text.reasoningTokens += normalized.reasoningTokens;
+    current.updatedAt = new Date().toISOString();
+    store.set("usage", current);
+    emitUsageUpdated(current);
+    return current;
+  },
+  recordTranscriptionUsage: (usage = {}) => {
+    const current = mergeUsageWithDefaults(store.get("usage"));
+    const normalized = normalizeTokenUsage(usage);
+    current.transcription.sessions += getNumber(usage.sessions);
+    current.transcription.finalTranscripts += getNumber(usage.finalTranscripts);
+    current.transcription.audioSeconds += getNumber(usage.audioSeconds);
+    current.transcription.inputTokens += normalized.inputTokens;
+    current.transcription.outputTokens += normalized.outputTokens;
+    current.transcription.totalTokens += normalized.totalTokens;
+    current.transcription.audioTokens += normalized.audioTokens;
+    current.updatedAt = new Date().toISOString();
+    store.set("usage", current);
+    emitUsageUpdated(current);
+    return current;
+  },
+  onUsageUpdated: (callback) => {
+    usageEvents.on("usage-updated", callback);
+    return () => usageEvents.off("usage-updated", callback);
+  },
   DEFAULT_PROMPT,
   DEFAULT_MODEL,
   AVAILABLE_MODELS,

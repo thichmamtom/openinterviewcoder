@@ -69,9 +69,6 @@
         width: 100%;
         margin-top: 20px;
       }
-      .save-button:hover {
-        background-color: #0056b3;
-      }
       .api-key-description {
         font-size: 12px;
         color: #999;
@@ -109,10 +106,6 @@
         color: #666;
         cursor: pointer;
       }
-      .reset-button:hover {
-        background-color: #f5f5f5;
-        border-color: #ccc;
-      }
       select {
         padding: 8px 12px;
         border: 1px solid #e0e0e0;
@@ -126,6 +119,60 @@
       select:focus {
         outline: none;
         border-color: #007aff;
+      }
+      input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        cursor: pointer;
+      }
+      .checkbox-control {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+      }
+      .usage-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .usage-panel {
+        border: 1px solid #e8e8e8;
+        border-radius: 6px;
+        padding: 12px;
+      }
+      .usage-panel-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 8px;
+      }
+      .usage-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 4px 0;
+        font-size: 12px;
+        color: #666;
+      }
+      .usage-row strong {
+        color: #333;
+        font-weight: 500;
+      }
+      .usage-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-top: 12px;
+      }
+      @media (max-width: 560px) {
+        .usage-grid {
+          grid-template-columns: 1fr;
+        }
+        .usage-footer {
+          align-items: flex-start;
+          flex-direction: column;
+        }
       }
     </style>
   </head>
@@ -162,6 +209,96 @@
             <div class="api-key-description">
               Select which OpenAI model to use for screenshot analysis.
             </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="section-title">Window</div>
+        <div class="setting-item">
+          <label class="setting-label">Mouse passthrough</label>
+          <div class="setting-control checkbox-control">
+            <input type="checkbox" id="mousePassthrough" />
+            <div>
+              <div class="api-key-description">
+                Enabled keeps the overlay click-through. Disable it to use native mouse wheel scrolling inside the overlay.
+              </div>
+              <div class="api-key-description">
+                Shortcut: Cmd/Ctrl + Shift + M
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="prompt-header">
+          <div class="section-title" style="margin-bottom: 0">Usage</div>
+          <button class="reset-button" id="resetUsageButton">Reset Usage</button>
+        </div>
+        <div class="usage-grid">
+          <div class="usage-panel">
+            <div class="usage-panel-title">Text generation</div>
+            <div class="usage-row">
+              <span>Requests</span>
+              <strong id="usageTextRequests">0</strong>
+            </div>
+            <div class="usage-row">
+              <span>Input tokens</span>
+              <strong id="usageTextInputTokens">0</strong>
+            </div>
+            <div class="usage-row">
+              <span>Output tokens</span>
+              <strong id="usageTextOutputTokens">0</strong>
+            </div>
+            <div class="usage-row">
+              <span>Total tokens</span>
+              <strong id="usageTextTotalTokens">0</strong>
+            </div>
+            <div class="usage-row">
+              <span>Cached tokens</span>
+              <strong id="usageTextCachedTokens">0</strong>
+            </div>
+            <div class="usage-row">
+              <span>Reasoning tokens</span>
+              <strong id="usageTextReasoningTokens">0</strong>
+            </div>
+          </div>
+          <div class="usage-panel">
+            <div class="usage-panel-title">Transcription</div>
+            <div class="usage-row">
+              <span>Sessions</span>
+              <strong id="usageTranscriptionSessions">0</strong>
+            </div>
+            <div class="usage-row">
+              <span>Final transcripts</span>
+              <strong id="usageTranscriptionFinals">0</strong>
+            </div>
+            <div class="usage-row">
+              <span>Audio streamed</span>
+              <strong id="usageTranscriptionAudio">0s</strong>
+            </div>
+            <div class="usage-row">
+              <span>Input tokens</span>
+              <strong id="usageTranscriptionInputTokens">0</strong>
+            </div>
+            <div class="usage-row">
+              <span>Output tokens</span>
+              <strong id="usageTranscriptionOutputTokens">0</strong>
+            </div>
+            <div class="usage-row">
+              <span>Audio tokens</span>
+              <strong id="usageTranscriptionAudioTokens">0</strong>
+            </div>
+            <div class="usage-row">
+              <span>Total tokens</span>
+              <strong id="usageTranscriptionTotalTokens">0</strong>
+            </div>
+          </div>
+        </div>
+        <div class="usage-footer">
+          <div class="api-key-description" id="usageUpdatedAt">
+            No usage recorded yet.
           </div>
         </div>
       </div>

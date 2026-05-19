@@ -15,6 +15,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Get default prompt
   getDefaultPrompt: () => ipcRenderer.invoke("get-default-prompt"),
 
+  // Usage
+  getUsage: () => ipcRenderer.invoke("get-usage"),
+  resetUsage: () => ipcRenderer.invoke("reset-usage"),
+  onUsageUpdated: (callback) =>
+    ipcRenderer.on("usage-updated", (event, value) => callback(value)),
+
   // Window controls
   minimizeWindow: () => ipcRenderer.invoke("minimize-window"),
   hideWindow: () => ipcRenderer.invoke("hide-window"),
@@ -34,6 +40,34 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Test response
   testResponse: (prompt) => ipcRenderer.invoke("test-response", prompt),
+
+  // System audio loopback
+  enableLoopbackAudio: () => ipcRenderer.invoke("enable-loopback-audio"),
+  disableLoopbackAudio: () => ipcRenderer.invoke("disable-loopback-audio"),
+
+  // Realtime audio transcription
+  startAudioTranscription: (options) =>
+    ipcRenderer.invoke("audio-transcription-start", options),
+  appendAudioTranscription: (data) =>
+    ipcRenderer.invoke("audio-transcription-append", data),
+  stopAudioTranscription: (data) =>
+    ipcRenderer.invoke("audio-transcription-stop", data),
+  onAudioTranscriptionDelta: (callback) =>
+    ipcRenderer.on("audio-transcription-delta", (event, value) =>
+      callback(value)
+    ),
+  onAudioTranscriptionCompleted: (callback) =>
+    ipcRenderer.on("audio-transcription-completed", (event, value) =>
+      callback(value)
+    ),
+  onAudioTranscriptionStatus: (callback) =>
+    ipcRenderer.on("audio-transcription-status", (event, value) =>
+      callback(value)
+    ),
+  onAudioTranscriptionError: (callback) =>
+    ipcRenderer.on("audio-transcription-error", (event, value) =>
+      callback(value)
+    ),
 
   // File handling
   openFile: (path) => shell.openPath(path),

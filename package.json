@@ -14,12 +14,14 @@
   "dependencies": {
     "axios": "^0.27.2",
     "dotenv": "^16.4.5",
+    "electron-audio-loopback": "^1.0.6",
     "electron-store": "^8.2.0",
     "marked": "^15.0.7",
-    "uiohook-napi": "^1.5.4"
+    "uiohook-napi": "^1.5.4",
+    "ws": "^8.20.1"
   },
   "devDependencies": {
-    "electron": "^23.3.13",
+    "electron": "^31.7.7",
     "electron-builder": "^24.13.3"
   },
   "build": {
@@ -28,7 +30,10 @@
     "icon": "assets/OCTO.png",
     "mac": {
       "category": "public.app-category.developer-tools",
-      "icon": "assets/icon.icns"
+      "icon": "assets/icon.icns",
+      "extendInfo": {
+        "NSAudioCaptureUsageDescription": "Open Interview Coder captures system audio for realtime transcription."
+      }
     },
     "win": {
       "target": [
