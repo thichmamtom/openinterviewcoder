@@ -24,9 +24,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Window controls
   minimizeWindow: () => ipcRenderer.invoke("minimize-window"),
   hideWindow: () => ipcRenderer.invoke("hide-window"),
+  setOverlayWindow: (overlayWindow) =>
+    ipcRenderer.invoke("set-overlay-window", overlayWindow),
 
   // Context menu
   buildContextMenu: () => ipcRenderer.invoke("build-context-menu"),
+
+  // Clipboard
+  writeClipboardText: (text) => ipcRenderer.invoke("write-clipboard-text", text),
 
   // Screenshot handling
   onScreenshotCaptured: (callback) =>
@@ -34,9 +39,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
   analyzeScreenshot: (data) => ipcRenderer.invoke("analyze-screenshot", data),
   onStreamUpdate: (callback) =>
     ipcRenderer.on("stream-update", (event, value) => callback(value)),
+  onCopyLastResponse: (callback) =>
+    ipcRenderer.on("copy-last-response", (event) => callback()),
   getScreenshotsDirectory: () =>
     ipcRenderer.invoke("get-screenshots-directory"),
   getRecentScreenshots: () => ipcRenderer.invoke("get-recent-screenshots"),
+  ensureScreenRecordingPermission: () =>
+    ipcRenderer.invoke("ensure-screen-recording-permission"),
+  getSystemAudioCaptureSupport: () =>
+    ipcRenderer.invoke("get-system-audio-capture-support"),
 
   // Test response
   testResponse: (prompt) => ipcRenderer.invoke("test-response", prompt),
@@ -101,6 +112,22 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Click-through mode
   onToggleMouseIgnore: (callback) =>
     ipcRenderer.on("toggle-mouse-ignore", (event, value) => callback(value)),
+  onAppBackgroundColorUpdated: (callback) =>
+    ipcRenderer.on("app-background-color-updated", (event, value) =>
+      callback(value)
+    ),
+  onResponseLanguageUpdated: (callback) =>
+    ipcRenderer.on("response-language-updated", (event, value) =>
+      callback(value)
+    ),
+
+  // Overlay customization mode
+  onOverlayWindowUpdated: (callback) =>
+    ipcRenderer.on("overlay-window-updated", (event, value) => callback(value)),
+  onOverlayEditModeChanged: (callback) =>
+    ipcRenderer.on("overlay-edit-mode-changed", (event, value) =>
+      callback(value)
+    ),
 });
 
 // No need for additional electron context bridge since we're handling everything through electronAPI

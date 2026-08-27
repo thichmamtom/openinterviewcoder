@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html class="overlay-root">
   <head>
     <meta charset="UTF-8" />
     <meta
@@ -9,8 +9,47 @@
     <link href="styles.css" rel="stylesheet" />
     <title>Invisible Assistant</title>
   </head>
-  <body>
+  <body class="overlay-page">
     <div id="invisible-container">
+      <div id="overlay-edit-handle" title="Drag to move"></div>
+      <div class="shortcut-corner" aria-label="Keyboard shortcuts">
+        <div class="shortcut-corner-item">
+          <i data-lucide="camera"></i>
+          <kbd>⌘⇧S</kbd><span>Screen</span>
+        </div>
+        <div class="shortcut-corner-item">
+          <i data-lucide="copy"></i>
+          <kbd>⌘⇧C</kbd><span>Select</span>
+        </div>
+        <div class="shortcut-corner-item">
+          <i data-lucide="clipboard-copy"></i>
+          <kbd>⌘⇧Y</kbd><span>Answer</span>
+        </div>
+        <div class="shortcut-corner-item">
+          <i data-lucide="volume-2"></i>
+          <kbd>⌘⇧V</kbd><span>Audio</span>
+        </div>
+        <div class="shortcut-corner-item">
+          <i data-lucide="eye-off"></i>
+          <kbd>⌘⇧H</kbd><span>Hide</span>
+        </div>
+        <div class="shortcut-corner-item">
+          <i data-lucide="move"></i>
+          <kbd>⌘←</kbd><span>Move</span>
+        </div>
+        <div class="shortcut-corner-item">
+          <i data-lucide="settings"></i>
+          <kbd>⌘,</kbd><span>Settings</span>
+        </div>
+        <div class="shortcut-corner-item">
+          <i data-lucide="mouse-pointer-click"></i>
+          <kbd>⌘⇧M</kbd><span>Mouse</span>
+        </div>
+        <div class="shortcut-corner-item">
+          <i data-lucide="languages"></i>
+          <kbd>⌘⇧L</kbd><span>Lang</span>
+        </div>
+      </div>
       <!-- Chat area -->
       <div class="chat-container">
         <div id="null-state" class="null-state">
@@ -22,12 +61,16 @@
             <h4>Open Interview Coder</h4>
             <div class="shortcuts">
               <div class="shortcut-item">
-                <kbd>⌘</kbd> + <kbd>H</kbd>
+                <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>S</kbd>
                 <span>Take a screenshot</span>
               </div>
               <div class="shortcut-item">
                 <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>C</kbd>
                 <span>Send selection to AI</span>
+              </div>
+              <div class="shortcut-item">
+                <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>Y</kbd>
+                <span>Copy latest AI response</span>
               </div>
               <div class="shortcut-item">
                 <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>V</kbd>
@@ -49,6 +92,10 @@
                 <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>M</kbd>
                 <span>Toggle mouse passthrough</span>
               </div>
+              <div class="shortcut-item">
+                <kbd>⌘</kbd> + <kbd>⇧</kbd> + <kbd>L</kbd>
+                <span>Toggle response language</span>
+              </div>
             </div>
           </div>
         </div>
@@ -65,6 +112,7 @@
 
     <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lucide@0.475.0/dist/umd/lucide.min.js"></script>
     <script src="src/renderer.js" defer></script>
   </body>
 </html>

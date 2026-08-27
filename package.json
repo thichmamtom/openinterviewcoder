@@ -4,11 +4,20 @@
   "description": "An invisible AI assistant for screen sharing",
   "main": "src/main.js",
   "scripts": {
+    "css:build": "tailwindcss -c ./tailwind.config.js -i ./src/tailwind.css -o ./styles.css",
+    "css:watch": "tailwindcss -c ./tailwind.config.js -i ./src/tailwind.css -o ./styles.css --watch",
+    "prestart": "npm run css:build",
     "start": "electron .",
+    "predev": "npm run css:build",
     "dev": "ELECTRON_RUN_AS_NODE= electron . --inspect",
+    "prebuild": "npm run css:build",
     "build": "electron-builder",
+    "prebuild:mac": "npm run css:build",
     "build:mac": "electron-builder --mac",
+    "build:mac:local": "npm run css:build && electron-builder --mac dir && APP=$(find dist -maxdepth 2 -name 'Open Interview Coder.app' -type d | head -n 1) && codesign --force --deep --sign - \"$APP\" && xattr -dr com.apple.quarantine \"$APP\"",
+    "prebuild:win": "npm run css:build",
     "build:win": "electron-builder --win",
+    "prebuild:linux": "npm run css:build",
     "build:linux": "electron-builder --linux"
   },
   "dependencies": {
@@ -22,7 +31,8 @@
   },
   "devDependencies": {
     "electron": "^31.7.7",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "tailwindcss": "^3.4.17"
   },
   "build": {
     "appId": "com.openinterviewcoder.app",

@@ -87,9 +87,11 @@ The built applications will be available in the `dist` directory.
 2. Use the keyboard shortcuts to show/hide the assistant:
 
    - `Cmd/Ctrl + Shift + S`: Take a screenshot
+   - `Cmd/Ctrl + Shift + Y`: Copy the latest AI response
    - `Cmd/Ctrl + Shift + H`: Toggle assistant visibility
    - `Cmd/Ctrl + ←/→/↑/↓`: Move the assistant window
    - `Cmd/Ctrl + Shift + M`: Toggle mouse passthrough for native overlay scrolling
+   - `Cmd/Ctrl + Shift + L`: Toggle response language
    - `Cmd + ,`: Open settings
 
 3. The assistant will appear as an overlay on your screen during screen sharing sessions
@@ -98,11 +100,13 @@ The built applications will be available in the `dist` directory.
 
 ## Configuration
 
-The OpenAI API key can be configured through the app's settings UI:
+The OpenAI API key and compatible API endpoint can be configured through the app's settings UI:
 
 1. Open the settings window (Settings > API Configuration)
 2. Enter your OpenAI API key
-3. Click "Save Changes"
+3. Optionally set an OpenAI-compatible base URL, for example `https://openrouter.ai/api/v1`
+4. Optionally enter a custom model ID, for example `openai/o4-mini`
+5. Click "Save Changes"
 
 ## Contributing
 

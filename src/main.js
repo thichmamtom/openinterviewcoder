@@ -23,20 +23,65 @@ const { initMain: initLoopbackAudio } = require("electron-audio-loopback");
 const config = require("./config");
 
 initLoopbackAudio({
+  forceCoreAudioTap: true,
   sourcesOptions: {
     types: ["screen"],
     thumbnailSize: { width: 0, height: 0 },
   },
 });
 
+function compareVersion(version, target) {
+  const versionParts = String(version).split(".").map((part) => Number(part) || 0);
+  const targetParts = String(target).split(".").map((part) => Number(part) || 0);
+  const length = Math.max(versionParts.length, targetParts.length);
+
+  for (let index = 0; index < length; index += 1) {
+    const versionPart = versionParts[index] || 0;
+    const targetPart = targetParts[index] || 0;
+    if (versionPart > targetPart) return 1;
+    if (versionPart < targetPart) return -1;
+  }
+
+  return 0;
+}
+
+function getSystemAudioCaptureSupport() {
+  if (process.platform !== "darwin") {
+    return { supported: true };
+  }
+
+  const version =
+    typeof process.getSystemVersion === "function"
+      ? process.getSystemVersion()
+      : "0.0.0";
+
+  if (compareVersion(version, "12.7.6") <= 0) {
+    return {
+      supported: false,
+      reason:
+        `Native system audio capture is not supported on macOS ${version}. ` +
+        "Upgrade to macOS 13 or newer, or route system audio through a virtual audio device such as BlackHole or Soundflower.",
+    };
+  }
+
+  return { supported: true };
+}
+
 // IPC handlers for settings
 ipcMain.handle("get-settings", () => {
   return {
     openaiKey: config.getOpenAIKey(),
+    openaiBaseUrl: config.getOpenAIBaseURL(),
     customPrompt: config.getCustomPrompt(),
+    responseLanguage: config.getResponseLanguage(),
+    responseLanguages: config.RESPONSE_LANGUAGES,
+    promptVariables: config.PROMPT_VARIABLES,
     model: config.getModel(),
     availableModels: config.AVAILABLE_MODELS,
     mousePassthrough: config.getMousePassthrough(),
+    appBackgroundColor: config.getAppBackgroundColor(),
+    appBackgroundOpacity: config.getAppBackgroundOpacity(),
+    overlayWindow: config.getOverlayWindow(),
   };
 });
 
@@ -69,6 +114,9 @@ ipcMain.handle("scroll-chat", (event, direction) => {
 });
 
 ipcMain.handle("save-settings", async (event, settings) => {
+  if (typeof settings.openaiBaseUrl === "string") {
+    config.setOpenAIBaseURL(settings.openaiBaseUrl);
+  }
   if (settings.openaiKey) {
     config.setOpenAIKey(settings.openaiKey);
     // Reinitialize LLM service with new API key
@@ -77,6 +125,10 @@ ipcMain.handle("save-settings", async (event, settings) => {
   if (typeof settings.customPrompt === "string") {
     config.setCustomPrompt(settings.customPrompt);
   }
+  if (typeof settings.responseLanguage === "string") {
+    config.setResponseLanguage(settings.responseLanguage);
+    sendResponseLanguageUpdated();
+  }
   if (settings.model) {
     config.setModel(settings.model);
   }
@@ -84,7 +136,30 @@ ipcMain.handle("save-settings", async (event, settings) => {
     config.setMousePassthrough(settings.mousePassthrough);
     setMousePassthrough(settings.mousePassthrough);
   }
+  if (typeof settings.appBackgroundColor === "string") {
+    config.setAppBackgroundColor(settings.appBackgroundColor);
+  }
+  if (
+    typeof settings.appBackgroundOpacity === "number" ||
+    typeof settings.appBackgroundOpacity === "string"
+  ) {
+    config.setAppBackgroundOpacity(settings.appBackgroundOpacity);
+  }
+  if (
+    typeof settings.appBackgroundColor === "string" ||
+    typeof settings.appBackgroundOpacity === "number" ||
+    typeof settings.appBackgroundOpacity === "string"
+  ) {
+    sendAppBackgroundColorUpdated();
+  }
+  if (settings.overlayWindow && typeof settings.overlayWindow === "object") {
+    applyOverlayWindowSettings(settings.overlayWindow);
+  }
   return true;
+});
+
+ipcMain.handle("set-overlay-window", (event, overlayWindow) => {
+  return applyOverlayWindowSettings(overlayWindow);
 });
 
 // IPC handler for settings window visibility
@@ -114,6 +189,11 @@ ipcMain.handle("build-context-menu", (event) => {
   return menu;
 });
 
+ipcMain.handle("write-clipboard-text", (event, text) => {
+  clipboard.writeText(typeof text === "string" ? text : String(text || ""));
+  return true;
+});
+
 // IPC handlers for screenshots
 ipcMain.handle("get-screenshots-directory", () => {
   const { ensureScreenshotsDirectory } = require("./screenshot");
@@ -122,6 +202,14 @@ ipcMain.handle("get-screenshots-directory", () => {
 
 ipcMain.handle("get-recent-screenshots", () => {
   return getRecentScreenshots();
+});
+
+ipcMain.handle("ensure-screen-recording-permission", () => {
+  return ensureScreenRecordingPermission();
+});
+
+ipcMain.handle("get-system-audio-capture-support", () => {
+  return getSystemAudioCaptureSupport();
 });
 
 // IPC handlers for window controls
@@ -141,20 +229,200 @@ let invisibleWindow;
 let settingsWindow = null;
 let tray = null;
 let mousePassthrough = config.getMousePassthrough();
+let settingsOverlayEditMode = false;
+let overlayVisibleBeforeSettings = true;
+let overlayBoundsPersistTimer = null;
+const OVERLAY_MIN_SIZE = {
+  width: 360,
+  height: 240,
+};
+
+function getSafeOverlayBounds(overlayWindow = config.getOverlayWindow()) {
+  const display =
+    Number.isFinite(overlayWindow.x) && Number.isFinite(overlayWindow.y)
+      ? screen.getDisplayMatching({
+          x: overlayWindow.x,
+          y: overlayWindow.y,
+          width: overlayWindow.width,
+          height: overlayWindow.height,
+        })
+      : screen.getPrimaryDisplay();
+  const workArea = display.workArea;
+  const width = Math.min(
+    Math.max(overlayWindow.width, OVERLAY_MIN_SIZE.width),
+    workArea.width
+  );
+  const height = Math.min(
+    Math.max(overlayWindow.height, OVERLAY_MIN_SIZE.height),
+    workArea.height
+  );
+  const x = Number.isFinite(overlayWindow.x)
+    ? Math.min(Math.max(overlayWindow.x, workArea.x), workArea.x + workArea.width - width)
+    : workArea.x + Math.round((workArea.width - width) / 2);
+  const y = Number.isFinite(overlayWindow.y)
+    ? Math.min(Math.max(overlayWindow.y, workArea.y), workArea.y + workArea.height - height)
+    : workArea.y + Math.round((workArea.height - height) / 2);
+
+  return { x, y, width, height };
+}
+
+function sendOverlayWindowUpdated(overlayWindow = config.getOverlayWindow()) {
+  if (settingsWindow && !settingsWindow.webContents.isDestroyed()) {
+    settingsWindow.webContents.send("overlay-window-updated", overlayWindow);
+  }
+}
+
+function sendOverlayEditModeChanged() {
+  if (!invisibleWindow || invisibleWindow.webContents.isDestroyed()) return;
+
+  invisibleWindow.webContents.send("overlay-edit-mode-changed", {
+    enabled: settingsOverlayEditMode,
+    freeDragInSettings: config.getOverlayWindow().freeDragInSettings !== false,
+  });
+}
+
+function getAppBackgroundSettings() {
+  return {
+    color: config.getAppBackgroundColor(),
+    opacity: config.getAppBackgroundOpacity(),
+  };
+}
+
+function sendAppBackgroundColorUpdated(
+  background = getAppBackgroundSettings()
+) {
+  if (!invisibleWindow || invisibleWindow.webContents.isDestroyed()) return;
+
+  invisibleWindow.webContents.send("app-background-color-updated", background);
+}
+
+function sendResponseLanguageUpdated(
+  language = config.getResponseLanguage(),
+  options = {}
+) {
+  const payload = {
+    language,
+    languages: config.RESPONSE_LANGUAGES,
+    toggled: Boolean(options.toggled),
+  };
+
+  [invisibleWindow, settingsWindow].forEach((window) => {
+    if (window && !window.webContents.isDestroyed()) {
+      window.webContents.send("response-language-updated", payload);
+    }
+  });
+}
+
+function persistOverlayBounds() {
+  if (!invisibleWindow || invisibleWindow.isDestroyed()) return;
+
+  const bounds = invisibleWindow.getBounds();
+  const overlayWindow = config.setOverlayWindow({
+    ...config.getOverlayWindow(),
+    ...bounds,
+  });
+  sendOverlayWindowUpdated(overlayWindow);
+}
+
+function scheduleOverlayBoundsPersist() {
+  clearTimeout(overlayBoundsPersistTimer);
+  overlayBoundsPersistTimer = setTimeout(persistOverlayBounds, 120);
+}
+
+function getEffectiveMousePassthrough() {
+  return settingsOverlayEditMode ? false : mousePassthrough;
+}
+
+function applyMousePassthrough(options = {}) {
+  if (!invisibleWindow) return mousePassthrough;
+
+  const effectiveMousePassthrough = getEffectiveMousePassthrough();
+  invisibleWindow.setIgnoreMouseEvents(effectiveMousePassthrough);
+  invisibleWindow.webContents.isIgnoringMouseEvents = effectiveMousePassthrough;
+
+  if (options.notify !== false && !invisibleWindow.webContents.isDestroyed()) {
+    invisibleWindow.webContents.send(
+      "toggle-mouse-ignore",
+      effectiveMousePassthrough
+    );
+  }
+
+  return mousePassthrough;
+}
+
+function setOverlayEditMode(enabled) {
+  settingsOverlayEditMode = Boolean(enabled);
+
+  if (!invisibleWindow || invisibleWindow.isDestroyed()) return;
+
+  invisibleWindow.setResizable(true);
+  invisibleWindow.setMovable(true);
+
+  if (settingsOverlayEditMode && !invisibleWindow.isVisible()) {
+    invisibleWindow.showInactive();
+  }
+
+  applyMousePassthrough();
+  sendOverlayEditModeChanged();
+}
+
+function beginOverlayCustomizationMode() {
+  if (!invisibleWindow || invisibleWindow.isDestroyed()) return;
+
+  if (!settingsOverlayEditMode) {
+    overlayVisibleBeforeSettings = invisibleWindow.isVisible();
+  }
+
+  if (!invisibleWindow.isVisible()) {
+    invisibleWindow.showInactive();
+  }
+
+  setOverlayEditMode(true);
+  sendOverlayWindowUpdated();
+}
+
+function endOverlayCustomizationMode() {
+  const shouldHideOverlay = !overlayVisibleBeforeSettings;
+
+  setOverlayEditMode(false);
+
+  if (
+    shouldHideOverlay &&
+    invisibleWindow &&
+    !invisibleWindow.isDestroyed() &&
+    !app.isQuitting
+  ) {
+    invisibleWindow.hide();
+  }
+}
+
+function applyOverlayWindowSettings(overlayWindow = {}) {
+  const nextOverlayWindow = config.setOverlayWindow(overlayWindow);
+
+  if (!invisibleWindow || invisibleWindow.isDestroyed()) {
+    sendOverlayWindowUpdated(nextOverlayWindow);
+    return nextOverlayWindow;
+  }
+
+  const bounds = getSafeOverlayBounds(nextOverlayWindow);
+  invisibleWindow.setMinimumSize(OVERLAY_MIN_SIZE.width, OVERLAY_MIN_SIZE.height);
+  invisibleWindow.setResizable(true);
+  invisibleWindow.setMovable(true);
+  invisibleWindow.setBounds(bounds);
+
+  const persistedOverlayWindow = config.setOverlayWindow({
+    ...nextOverlayWindow,
+    ...bounds,
+  });
+  sendOverlayEditModeChanged();
+  sendOverlayWindowUpdated(persistedOverlayWindow);
+  return persistedOverlayWindow;
+}
 
 function setMousePassthrough(enabled, options = {}) {
   mousePassthrough = Boolean(enabled);
 
-  if (!invisibleWindow) return mousePassthrough;
-
-  invisibleWindow.setIgnoreMouseEvents(mousePassthrough);
-  invisibleWindow.webContents.isIgnoringMouseEvents = mousePassthrough;
-
-  if (options.notify !== false && !invisibleWindow.webContents.isDestroyed()) {
-    invisibleWindow.webContents.send("toggle-mouse-ignore", mousePassthrough);
-  }
-
-  return mousePassthrough;
+  return applyMousePassthrough(options);
 }
 
 function configureMediaPermissions() {
@@ -168,8 +436,7 @@ function configureMediaPermissions() {
     if (permission !== "media") return false;
 
     const mediaTypes = Array.isArray(details.mediaTypes) ? details.mediaTypes : [];
-    const includesVideo = mediaTypes.includes("video");
-    return !includesVideo && (mediaTypes.length === 0 || mediaTypes.includes("audio"));
+    return mediaTypes.length === 0 || mediaTypes.includes("audio");
   };
 
   appSession.setPermissionCheckHandler((webContents, permission, origin, details) =>
@@ -195,6 +462,16 @@ function createMenuTemplate() {
                 label: "Preferences...",
                 accelerator: "Command+,",
                 click: () => createSettingsWindow(),
+              },
+              {
+                label: "Toggle Response Language",
+                accelerator: "CommandOrControl+Shift+L",
+                click: () => {
+                  config.toggleResponseLanguage();
+                  sendResponseLanguageUpdated(config.getResponseLanguage(), {
+                    toggled: true,
+                  });
+                },
               },
               { type: "separator" },
               { role: "services" },
@@ -241,7 +518,14 @@ function createMenuTemplate() {
 }
 
 function createInvisibleWindow() {
+  const overlayBounds = getSafeOverlayBounds(config.getOverlayWindow());
+
   invisibleWindow = new BrowserWindow({
+    ...overlayBounds,
+    minWidth: OVERLAY_MIN_SIZE.width,
+    minHeight: OVERLAY_MIN_SIZE.height,
+    resizable: true,
+    movable: true,
     frame: false,
     transparent: true,
     hasShadow: false,
@@ -273,6 +557,7 @@ function createInvisibleWindow() {
   invisibleWindow.loadFile("index.html");
   invisibleWindow.webContents.once("did-finish-load", () => {
     setMousePassthrough(mousePassthrough);
+    sendOverlayEditModeChanged();
   });
 
   // Open DevTools in development
@@ -298,6 +583,9 @@ function createInvisibleWindow() {
   const menu = Menu.buildFromTemplate(createMenuTemplate());
   Menu.setApplicationMenu(menu);
 
+  invisibleWindow.on("move", scheduleOverlayBoundsPersist);
+  invisibleWindow.on("resize", scheduleOverlayBoundsPersist);
+
   // Show window initially
   invisibleWindow.showInactive();
 
@@ -307,33 +595,44 @@ function createInvisibleWindow() {
 
 // Set up global wheel event capture using uiohook-napi
 function setupGlobalWheelCapture() {
-  uIOhook.on("wheel", (event) => {
-    if (!invisibleWindow || !invisibleWindow.isVisible()) return;
-    if (!mousePassthrough) return;
+  try {
+    uIOhook.on("wheel", (event) => {
+      if (!invisibleWindow || !invisibleWindow.isVisible()) return;
+      if (settingsOverlayEditMode) return;
+      if (!mousePassthrough) return;
 
-    const bounds = invisibleWindow.getBounds();
-    const mouseX = event.x;
-    const mouseY = event.y;
+      const bounds = invisibleWindow.getBounds();
+      const mouseX = event.x;
+      const mouseY = event.y;
 
-    // Check if mouse is within the overlay window bounds
-    if (
-      mouseX >= bounds.x &&
-      mouseX <= bounds.x + bounds.width &&
-      mouseY >= bounds.y &&
-      mouseY <= bounds.y + bounds.height
-    ) {
-      // event.rotation: positive = scroll down, negative = scroll up
-      const scrollAmount = event.rotation * 50;
-      invisibleWindow.webContents.send("scroll-chat", scrollAmount);
-    }
-  });
+      // Check if mouse is within the overlay window bounds
+      if (
+        mouseX >= bounds.x &&
+        mouseX <= bounds.x + bounds.width &&
+        mouseY >= bounds.y &&
+        mouseY <= bounds.y + bounds.height
+      ) {
+        // event.rotation: positive = scroll down, negative = scroll up
+        const scrollAmount = event.rotation * 50;
+        invisibleWindow.webContents.send("scroll-chat", scrollAmount);
+      }
+    });
 
-  uIOhook.start();
+    uIOhook.start();
+  } catch (error) {
+    console.warn(
+      "Global wheel capture disabled. Grant Accessibility permission and restart the app to enable overlay wheel scrolling.",
+      error
+    );
+  }
 }
 
 function createSettingsWindow() {
+  beginOverlayCustomizationMode();
+
   if (settingsWindow) {
     settingsWindow.show();
+    settingsWindow.focus();
     return;
   }
 
@@ -358,6 +657,7 @@ function createSettingsWindow() {
   }
 
   settingsWindow.once("ready-to-show", () => {
+    beginOverlayCustomizationMode();
     settingsWindow.show();
   });
 
@@ -366,15 +666,29 @@ function createSettingsWindow() {
     if (!app.isQuitting) {
       event.preventDefault();
       settingsWindow.hide();
+      endOverlayCustomizationMode();
     }
     return false;
+  });
+
+  settingsWindow.on("hide", () => {
+    if (!app.isQuitting) {
+      endOverlayCustomizationMode();
+    }
   });
 }
 
 // Register global shortcuts
 function registerShortcuts() {
-  // Screenshot shortcut (Command/Ctrl + H)
-  globalShortcut.register("CommandOrControl+H", async () => {
+  const registerShortcut = (accelerator, handler) => {
+    const registered = globalShortcut.register(accelerator, handler);
+    if (!registered) {
+      console.warn(`Global shortcut failed to register: ${accelerator}`);
+    }
+    return registered;
+  };
+
+  const captureScreenshot = async () => {
     try {
       // Hide window before taking screenshot
       if (invisibleWindow && invisibleWindow.isVisible()) {
@@ -409,19 +723,26 @@ function registerShortcuts() {
         invisibleWindow.showInactive();
       }
     }
-  });
+  };
 
-  // Toggle visibility shortcut (Command/Ctrl + B)
-  globalShortcut.register("CommandOrControl+B", () => {
+  const toggleVisibility = () => {
     if (invisibleWindow.isVisible()) {
       invisibleWindow.hide();
     } else {
       invisibleWindow.showInactive();
     }
-  });
+  };
+
+  // Screenshot shortcut. Shift+S matches the documented shortcut.
+  registerShortcut("CommandOrControl+Shift+S", captureScreenshot);
+  registerShortcut("CommandOrControl+H", captureScreenshot);
+
+  // Toggle visibility shortcut. Shift+H matches the documented shortcut.
+  registerShortcut("CommandOrControl+Shift+H", toggleVisibility);
+  registerShortcut("CommandOrControl+B", toggleVisibility);
 
   // Test response shortcut (Command/Ctrl + Shift + T)
-  globalShortcut.register("CommandOrControl+Shift+T", async () => {
+  registerShortcut("CommandOrControl+Shift+T", async () => {
     if (invisibleWindow) {
       try {
         await invisibleWindow.webContents.executeJavaScript(`
@@ -438,28 +759,28 @@ function registerShortcuts() {
   const screenBounds = screen.getPrimaryDisplay().workAreaSize;
 
   // Nudge window with arrow keys
-  globalShortcut.register("CommandOrControl+Left", () => {
+  registerShortcut("CommandOrControl+Left", () => {
     if (invisibleWindow) {
       const [x, y] = invisibleWindow.getPosition();
       invisibleWindow.setPosition(x - NUDGE_AMOUNT, y);
     }
   });
 
-  globalShortcut.register("CommandOrControl+Right", () => {
+  registerShortcut("CommandOrControl+Right", () => {
     if (invisibleWindow) {
       const [x, y] = invisibleWindow.getPosition();
       invisibleWindow.setPosition(x + NUDGE_AMOUNT, y);
     }
   });
 
-  globalShortcut.register("CommandOrControl+Up", () => {
+  registerShortcut("CommandOrControl+Up", () => {
     if (invisibleWindow) {
       const [x, y] = invisibleWindow.getPosition();
       invisibleWindow.setPosition(x, y - NUDGE_AMOUNT);
     }
   });
 
-  globalShortcut.register("CommandOrControl+Down", () => {
+  registerShortcut("CommandOrControl+Down", () => {
     if (invisibleWindow) {
       const [x, y] = invisibleWindow.getPosition();
       invisibleWindow.setPosition(x, y + NUDGE_AMOUNT);
@@ -467,26 +788,26 @@ function registerShortcuts() {
   });
 
   // Snap window to screen edges
-  globalShortcut.register("CommandOrControl+Shift+Left", () => {
+  registerShortcut("CommandOrControl+Shift+Left", () => {
     if (invisibleWindow) {
       invisibleWindow.setPosition(0, 0);
     }
   });
 
-  globalShortcut.register("CommandOrControl+Shift+Right", () => {
+  registerShortcut("CommandOrControl+Shift+Right", () => {
     if (invisibleWindow) {
       const windowBounds = invisibleWindow.getBounds();
       invisibleWindow.setPosition(screenBounds.width - windowBounds.width, 0);
     }
   });
 
-  globalShortcut.register("CommandOrControl+Shift+Up", () => {
+  registerShortcut("CommandOrControl+Shift+Up", () => {
     if (invisibleWindow) {
       invisibleWindow.setPosition(0, 0);
     }
   });
 
-  globalShortcut.register("CommandOrControl+Shift+Down", () => {
+  registerShortcut("CommandOrControl+Shift+Down", () => {
     if (invisibleWindow) {
       const windowBounds = invisibleWindow.getBounds();
       invisibleWindow.setPosition(0, screenBounds.height - windowBounds.height);
@@ -494,15 +815,22 @@ function registerShortcuts() {
   });
 
   // Reset chat shortcut (Command/Ctrl + Shift + R)
-  globalShortcut.register("CommandOrControl+Shift+R", () => {
+  registerShortcut("CommandOrControl+Shift+R", () => {
     if (invisibleWindow) {
       invisibleWindow.webContents.send("reset-chat");
       resetConversationHistory();
     }
   });
 
+  // Copy the latest assistant response, including in-progress streamed text.
+  registerShortcut("CommandOrControl+Shift+Y", () => {
+    if (invisibleWindow) {
+      invisibleWindow.webContents.send("copy-last-response");
+    }
+  });
+
   // Copy selection and send to AI (Command/Ctrl + Shift + C)
-  globalShortcut.register("CommandOrControl+Shift+C", async () => {
+  registerShortcut("CommandOrControl+Shift+C", async () => {
     if (!invisibleWindow) return;
 
     try {
@@ -542,7 +870,7 @@ function registerShortcuts() {
   });
 
   // Toggle speech-to-text (Command/Ctrl + Shift + V)
-  globalShortcut.register("CommandOrControl+Shift+V", () => {
+  registerShortcut("CommandOrControl+Shift+V", () => {
     if (invisibleWindow) {
       // Show overlay if hidden
       if (!invisibleWindow.isVisible()) {
@@ -553,39 +881,30 @@ function registerShortcuts() {
   });
 
   // Toggle mouse passthrough. Off lets Chromium handle native wheel scrolling.
-  globalShortcut.register("CommandOrControl+Shift+M", () => {
+  registerShortcut("CommandOrControl+Shift+M", () => {
     const enabled = !mousePassthrough;
     config.setMousePassthrough(enabled);
     setMousePassthrough(enabled);
   });
 
+  // Toggle response language, similar to an input-method switch.
+  registerShortcut("CommandOrControl+Shift+L", () => {
+    const language = config.toggleResponseLanguage();
+    sendResponseLanguageUpdated(language, { toggled: true });
+  });
+
   // Chat scrolling shortcuts
-  globalShortcut.register("Alt+Up", () => {
+  registerShortcut("Alt+Up", () => {
     if (invisibleWindow) {
       invisibleWindow.webContents.send("scroll-chat", "up");
     }
   });
 
-  globalShortcut.register("Alt+Down", () => {
+  registerShortcut("Alt+Down", () => {
     if (invisibleWindow) {
       invisibleWindow.webContents.send("scroll-chat", "down");
     }
   });
-
-  // For macOS, also register Option key combinations
-  if (process.platform === "darwin") {
-    globalShortcut.register("Option+Up", () => {
-      if (invisibleWindow) {
-        invisibleWindow.webContents.send("scroll-chat", "up");
-      }
-    });
-
-    globalShortcut.register("Option+Down", () => {
-      if (invisibleWindow) {
-        invisibleWindow.webContents.send("scroll-chat", "down");
-      }
-    });
-  }
 }
 
 // When app is ready
@@ -595,6 +914,7 @@ app.whenReady().then(async () => {
   if (apiKey) {
     process.env.OPENAI_API_KEY = apiKey;
   }
+  process.env.OPENAI_BASE_URL = config.getOpenAIBaseURL();
 
   // Ensure all permissions before proceeding (macOS)
   if (process.platform === "darwin") {

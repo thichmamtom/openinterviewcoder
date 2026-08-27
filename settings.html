@@ -2,181 +2,9 @@
 <html>
   <head>
     <title>Settings</title>
-    <style>
-      body {
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-          Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
-        margin: 0;
-        padding: 20px;
-        background-color: #ffffff;
-      }
-      .settings-container {
-        margin: 0 auto;
-        padding: 20px;
-      }
-      .settings-header {
-        margin-bottom: 30px;
-      }
-      .settings-title {
-        font-size: 20px;
-        font-weight: 500;
-        color: #333;
-        margin: 0;
-      }
-      .settings-section {
-        margin-bottom: 30px;
-      }
-      .section-title {
-        font-size: 16px;
-        font-weight: 500;
-        color: #666;
-        margin-bottom: 15px;
-      }
-      .setting-item {
-        display: flex;
-        align-items: center;
-        margin-bottom: 15px;
-      }
-      .setting-label {
-        flex: 1;
-        font-size: 14px;
-        color: #333;
-      }
-      .setting-control {
-        margin-left: 20px;
-        flex: 2;
-      }
-      input[type="text"] {
-        padding: 8px 12px;
-        border: 1px solid #e0e0e0;
-        border-radius: 4px;
-        font-size: 14px;
-        width: 100%;
-        box-sizing: border-box;
-      }
-      input[type="text"]:focus {
-        outline: none;
-        border-color: #007aff;
-      }
-      .save-button {
-        background-color: #007aff;
-        color: white;
-        border: none;
-        padding: 10px 16px;
-        border-radius: 4px;
-        font-size: 14px;
-        cursor: pointer;
-        width: 100%;
-        margin-top: 20px;
-      }
-      .api-key-description {
-        font-size: 12px;
-        color: #999;
-        margin-top: 4px;
-      }
-      .prompt-textarea {
-        width: 100%;
-        min-height: 200px;
-        padding: 10px 12px;
-        border: 1px solid #e0e0e0;
-        border-radius: 4px;
-        font-size: 13px;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-          Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
-        line-height: 1.5;
-        resize: vertical;
-        box-sizing: border-box;
-      }
-      .prompt-textarea:focus {
-        outline: none;
-        border-color: #007aff;
-      }
-      .prompt-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 8px;
-      }
-      .reset-button {
-        background: none;
-        border: 1px solid #e0e0e0;
-        padding: 4px 10px;
-        border-radius: 4px;
-        font-size: 12px;
-        color: #666;
-        cursor: pointer;
-      }
-      select {
-        padding: 8px 12px;
-        border: 1px solid #e0e0e0;
-        border-radius: 4px;
-        font-size: 14px;
-        width: 100%;
-        box-sizing: border-box;
-        background-color: #fff;
-        cursor: pointer;
-      }
-      select:focus {
-        outline: none;
-        border-color: #007aff;
-      }
-      input[type="checkbox"] {
-        width: 16px;
-        height: 16px;
-        cursor: pointer;
-      }
-      .checkbox-control {
-        display: flex;
-        align-items: flex-start;
-        gap: 10px;
-      }
-      .usage-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 16px;
-      }
-      .usage-panel {
-        border: 1px solid #e8e8e8;
-        border-radius: 6px;
-        padding: 12px;
-      }
-      .usage-panel-title {
-        font-size: 13px;
-        font-weight: 600;
-        color: #333;
-        margin-bottom: 8px;
-      }
-      .usage-row {
-        display: flex;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 4px 0;
-        font-size: 12px;
-        color: #666;
-      }
-      .usage-row strong {
-        color: #333;
-        font-weight: 500;
-      }
-      .usage-footer {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        margin-top: 12px;
-      }
-      @media (max-width: 560px) {
-        .usage-grid {
-          grid-template-columns: 1fr;
-        }
-        .usage-footer {
-          align-items: flex-start;
-          flex-direction: column;
-        }
-      }
-    </style>
+    <link href="styles.css" rel="stylesheet" />
   </head>
-  <body>
+  <body class="settings-page">
     <div class="settings-container">
       <div class="settings-header">
         <h1 class="settings-title">Settings</h1>
@@ -193,8 +21,20 @@
               placeholder="Enter your OpenAI API key"
             />
             <div class="api-key-description">
-              Your API key is stored locally and never sent to any server except
-              OpenAI's API.
+              Your API key is stored locally and sent only to the configured API provider.
+            </div>
+          </div>
+        </div>
+        <div class="setting-item">
+          <label class="setting-label">OpenAI base URL</label>
+          <div class="setting-control">
+            <input
+              type="text"
+              id="openaiBaseUrl"
+              placeholder="https://api.openai.com/v1"
+            />
+            <div class="api-key-description">
+              Use an OpenAI-compatible endpoint such as https://openrouter.ai/api/v1.
             </div>
           </div>
         </div>
@@ -203,11 +43,24 @@
       <div class="settings-section">
         <div class="section-title">Model</div>
         <div class="setting-item">
-          <label class="setting-label">OpenAI Model</label>
+          <label class="setting-label">Model</label>
           <div class="setting-control">
             <select id="modelSelect"></select>
             <div class="api-key-description">
-              Select which OpenAI model to use for screenshot analysis.
+              Select which model to use for screenshot analysis.
+            </div>
+          </div>
+        </div>
+        <div class="setting-item">
+          <label class="setting-label">Custom model ID</label>
+          <div class="setting-control">
+            <input
+              type="text"
+              id="customModel"
+              placeholder="openai/o4-mini"
+            />
+            <div class="api-key-description">
+              Optional. Use this for provider-specific model IDs like OpenRouter slugs.
             </div>
           </div>
         </div>
@@ -215,6 +68,70 @@
 
       <div class="settings-section">
         <div class="section-title">Window</div>
+        <div class="setting-item">
+          <label class="setting-label">Overlay size</label>
+          <div class="setting-control">
+            <div class="size-control">
+              <input
+                type="number"
+                id="overlayWidth"
+                min="360"
+                step="20"
+                aria-label="Overlay width"
+              />
+              <span class="size-separator">x</span>
+              <input
+                type="number"
+                id="overlayHeight"
+                min="240"
+                step="20"
+                aria-label="Overlay height"
+              />
+            </div>
+            <button class="reset-button apply-window-button" id="applyWindowButton">
+              Apply Size
+            </button>
+            <div class="api-key-description">
+              Settings opens the overlay so you can resize it from the window edges or apply an exact size here.
+            </div>
+          </div>
+        </div>
+        <div class="setting-item">
+          <label class="setting-label">Free drag in settings</label>
+          <div class="setting-control checkbox-control">
+            <input type="checkbox" id="freeDragInSettings" />
+            <div class="api-key-description">
+              When settings is open, drag anywhere on the overlay to reposition it.
+            </div>
+          </div>
+        </div>
+        <div class="setting-item">
+          <label class="setting-label">App background color</label>
+          <div class="setting-control checkbox-control">
+            <input type="color" id="appBackgroundColor" />
+            <div class="api-key-description">
+              Sets the overlay background color. Changes apply when saved.
+            </div>
+          </div>
+        </div>
+        <div class="setting-item">
+          <label class="setting-label">Background transparency</label>
+          <div class="setting-control">
+            <div class="opacity-control">
+              <input
+                type="range"
+                id="appBackgroundOpacity"
+                min="0"
+                max="100"
+                step="1"
+              />
+              <span class="opacity-value" id="appBackgroundOpacityValue">72%</span>
+            </div>
+            <div class="api-key-description">
+              Lower values make the overlay background more transparent.
+            </div>
+          </div>
+        </div>
         <div class="setting-item">
           <label class="setting-label">Mouse passthrough</label>
           <div class="setting-control checkbox-control">
@@ -233,7 +150,7 @@
 
       <div class="settings-section">
         <div class="prompt-header">
-          <div class="section-title" style="margin-bottom: 0">Usage</div>
+          <div class="section-title">Usage</div>
           <button class="reset-button" id="resetUsageButton">Reset Usage</button>
         </div>
         <div class="usage-grid">
@@ -305,14 +222,24 @@
       
       <div class="settings-section">
         <div class="prompt-header">
-          <div class="section-title" style="margin-bottom: 0">Custom System Prompt</div>
+          <div class="section-title">Custom System Prompt</div>
           <button class="reset-button" id="resetPromptButton">Reset to Default</button>
+        </div>
+        <div class="setting-item">
+          <label class="setting-label">Response language</label>
+          <div class="setting-control">
+            <select id="responseLanguageSelect"></select>
+            <div class="api-key-description">
+              Shortcut: Cmd/Ctrl + Shift + L. This sets values for variables such as {{lang}} and {{language}}.
+            </div>
+          </div>
         </div>
         <textarea class="prompt-textarea" id="customPrompt"
           placeholder="Enter your custom system prompt for the AI assistant..."></textarea>
         <div class="api-key-description">
-          This prompt instructs the AI how to analyze your screenshots. Changes take effect on the next analysis.
+          Variables are resolved before the prompt is sent. Changes take effect on the next analysis.
         </div>
+        <div class="prompt-variable-list" id="promptVariables"></div>
       </div>
 
       <button class="save-button" id="saveButton">Save</button>

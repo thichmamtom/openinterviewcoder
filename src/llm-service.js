@@ -82,20 +82,39 @@ async function initializeLLMService() {
 }
 
 function validateOpenAIKey() {
-  const apiKey = config.getOpenAIKey();
+  const apiKey = config.getOpenAIKey().trim();
   if (!apiKey) {
     throw new Error(
       "OpenAI API key not configured. Please set your API key in the settings."
     );
   }
 
-  if (!apiKey.startsWith("sk-")) {
+  if (config.isDefaultOpenAIBaseURL() && !apiKey.startsWith("sk-")) {
     throw new Error(
       "Invalid OpenAI API key format. API keys should start with 'sk-'"
     );
   }
 
   return apiKey;
+}
+
+function buildOpenAIAPIURL(pathname) {
+  const baseUrl = new URL(config.getOpenAIBaseURL());
+  const basePath = baseUrl.pathname.replace(/\/+$/, "");
+  const requestPath = String(pathname || "").replace(/^\/+/, "");
+
+  baseUrl.pathname = `${basePath}/${requestPath}`;
+  baseUrl.search = "";
+  baseUrl.hash = "";
+
+  return baseUrl.toString();
+}
+
+function buildOpenAIRealtimeURL(model) {
+  const realtimeUrl = new URL(buildOpenAIAPIURL("/realtime"));
+  realtimeUrl.protocol = realtimeUrl.protocol === "http:" ? "ws:" : "wss:";
+  realtimeUrl.searchParams.set("model", model);
+  return realtimeUrl.toString();
 }
 
 function sendTranscriptionStatus(sender, sessionId, status, detail) {
@@ -307,14 +326,11 @@ async function startRealtimeTranscription(sender, options = {}) {
     usageFlushed: false,
   };
 
-  const ws = new WebSocket(
-    "wss://api.openai.com/v1/realtime?model=gpt-realtime",
-    {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-    }
-  );
+  const ws = new WebSocket(buildOpenAIRealtimeURL("gpt-realtime"), {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+  });
   session.ws = ws;
   transcriptionSessions.set(sessionId, session);
   config.recordTranscriptionUsage({ sessions: 1 });
@@ -491,9 +507,10 @@ function stopRealtimeTranscription(data) {
 async function makeLLMRequest(event, data) {
   const apiKey = validateOpenAIKey();
 
-  const systemPrompt = config.getCustomPrompt();
+  const systemPrompt = config.buildSystemPrompt();
   const selectedModel = config.getModel();
   const messageId = Date.now().toString();
+  const requestTimeoutMs = 120000;
 
   // Build the current user message content
   const userContent = [
@@ -552,19 +569,28 @@ async function makeLLMRequest(event, data) {
   try {
     const response = await axios({
       method: "post",
-      url: "https://api.openai.com/v1/responses",
+      url: buildOpenAIAPIURL("/responses"),
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
       data: requestData,
       responseType: "stream",
+      timeout: requestTimeoutMs,
     });
 
     let fullContent = "";
 
     await new Promise((resolve, reject) => {
       let buffer = "";
+      const timeout = setTimeout(() => {
+        response.data.destroy(new Error("OpenAI response timed out."));
+      }, requestTimeoutMs);
+
+      const finish = (callback) => {
+        clearTimeout(timeout);
+        callback();
+      };
 
       response.data.on("data", (chunk) => {
         buffer += chunk.toString();
@@ -584,8 +610,12 @@ async function makeLLMRequest(event, data) {
           try {
             const parsed = JSON.parse(jsonStr);
 
-            // Handle output_text.delta events
-            if (parsed.type === "response.output_text.delta" && parsed.delta) {
+            // Handle OpenAI and OpenRouter Responses streaming delta events.
+            if (
+              (parsed.type === "response.output_text.delta" ||
+                parsed.type === "response.content_part.delta") &&
+              parsed.delta
+            ) {
               fullContent += parsed.delta;
               event.sender.send("stream-update", {
                 messageId,
@@ -596,11 +626,14 @@ async function makeLLMRequest(event, data) {
             }
 
             // Handle completion
-            if (parsed.type === "response.completed") {
+            if (
+              parsed.type === "response.completed" ||
+              parsed.type === "response.done"
+            ) {
               if (parsed.response && parsed.response.usage) {
                 config.recordTextUsage(parsed.response.usage);
               }
-              resolve();
+              finish(resolve);
             }
           } catch (e) {
             // Skip unparseable lines
@@ -609,11 +642,11 @@ async function makeLLMRequest(event, data) {
       });
 
       response.data.on("end", () => {
-        resolve();
+        finish(resolve);
       });
 
       response.data.on("error", (err) => {
-        reject(err);
+        finish(() => reject(err));
       });
     });
 
@@ -643,7 +676,11 @@ async function makeLLMRequest(event, data) {
     // Remove the user message we just added since the request failed
     conversationHistory.pop();
 
-    if (error.response) {
+    if (error.code === "ECONNABORTED" || /timed out/i.test(error.message)) {
+      throw new Error(
+        "OpenAI request timed out. Please check the model, base URL, and network connection."
+      );
+    } else if (error.response) {
       if (error.response.status === 401) {
         throw new Error(
           "Invalid API key. Please check your OpenAI API key in settings."
@@ -657,7 +694,7 @@ async function makeLLMRequest(event, data) {
       throw new Error(`API Error: ${errorMessage}`);
     } else if (error.request) {
       throw new Error(
-        "No response received from OpenAI API. Please check your internet connection."
+        "No response received from the configured API. Please check your base URL and internet connection."
       );
     }
     throw new Error(`Request Error: ${error.message}`);
